@@ -1,0 +1,88 @@
+/* Tablet-ops specific styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(56, 189, 248, 0.08), transparent 32rem),
+    linear-gradient(180deg, var(--bg-primary, #08111f) 0%, #050b14 100%);
+  color: var(--ink-primary, #f1f5f9);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: light) {
+  body {
+    background:
+      radial-gradient(circle at 12% 0%, rgba(8, 127, 176, 0.1), transparent 30rem),
+      linear-gradient(180deg, #f8fafc 0%, #edf3f8 100%);
+  }
+}
+
+select,
+textarea,
+input {
+  background: var(--bg-secondary, #0d1828);
+  color: var(--ink-primary, #f4f8fb);
+}
+
+/* Touch-friendly interactions */
+button, input, select, textarea {
+  touch-action: manipulation;
+}
+
+/* Large touch targets for tablet */
+.touch-target {
+  min-height: 48px;
+  min-width: 48px;
+}
+
+/* Kiosk mode helpers */
+.kiosk-fullscreen {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* Large display typography */
+.display-large {
+  font-size: 3rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.display-medium {
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+/* Alert animations */
+@keyframes pulse-critical {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-critical {
+  animation: pulse-critical 0.5s ease-in-out infinite;
+}
+
+/* Status indicators */
+.status-live {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

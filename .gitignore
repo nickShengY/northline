@@ -1,0 +1,15 @@
+node_modules
+.pnpm-store
+.codex
+.turbo
+.env
+.env.*
+!.env.example
+.dist
+dist
+build
+coverage
+*.log
+.DS_Store
+.vscode
+.wrangler

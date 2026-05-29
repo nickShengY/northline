@@ -1,0 +1,36 @@
+name = "northline-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+APP_ENV = "development"
+NEON_DATABASE_URL = "postgresql://localhost:5432/northline"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "northline-artifacts"
+preview_bucket_name = "northline-artifacts-preview"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "northline-db"
+database_id = ""
+
+[env.staging]
+name = "northline-api-staging"
+[env.staging.vars]
+APP_ENV = "staging"
+
+[[env.staging.r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "northline-artifacts-staging"
+
+[env.production]
+name = "northline-api"
+[env.production.vars]
+APP_ENV = "production"
+
+[[env.production.r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "northline-artifacts-prod"

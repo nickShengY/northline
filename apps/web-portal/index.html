@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#00d4ff" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#00d4ff" />
+
+    <!-- Performance -->
+    <meta name="description" content="Deck operations for offshore fishing vessels — haul logging, gear tracking, and compliance" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- iOS PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Northline Portal" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="apple-touch-icon" href="/icons/icon.svg" />
+
+    <!-- Preconnect for Performance -->
+    <link rel="preconnect" href="https://api.northline.fishery" />
+
+    <title>Northline Command Portal</title>
+
+    <!-- Prevent FOUC -->
+    <style>
+      html { background: #050811; }
+      body { opacity: 0; animation: fadeIn 0.3s ease forwards; }
+      @keyframes fadeIn { to { opacity: 1; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
