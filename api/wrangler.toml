@@ -17,6 +17,14 @@ binding = "DB"
 database_name = "northline-db"
 database_id = ""
 
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiterDurableObject"]
+
 [env.staging]
 name = "northline-api-staging"
 [env.staging.vars]
@@ -26,6 +34,10 @@ APP_ENV = "staging"
 binding = "R2_BUCKET"
 bucket_name = "northline-artifacts-staging"
 
+[[env.staging.durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDurableObject"
+
 [env.production]
 name = "northline-api"
 [env.production.vars]
@@ -34,3 +46,7 @@ APP_ENV = "production"
 [[env.production.r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "northline-artifacts-prod"
+
+[[env.production.durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDurableObject"

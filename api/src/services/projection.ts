@@ -19,6 +19,40 @@ export interface ProjectionState {
   safety_risk_series?: Record<string, unknown>;
 }
 
+function timestampMillis(value: string | undefined) {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function compareProjectionEvents(left: OpsEvent, right: OpsEvent) {
+  const leftServer = timestampMillis(left.ts_server);
+  const rightServer = timestampMillis(right.ts_server);
+  if (leftServer !== rightServer) return leftServer - rightServer;
+
+  const leftDevice = timestampMillis(left.ts_device);
+  const rightDevice = timestampMillis(right.ts_device);
+  if (leftDevice !== rightDevice) return leftDevice - rightDevice;
+
+  return left.event_id.localeCompare(right.event_id);
+}
+
+function orderProjectionEvents(events: OpsEvent[]) {
+  return [...events].sort(compareProjectionEvents);
+}
+
+function payloadOf(event: OpsEvent) {
+  return event.payload_json && typeof event.payload_json === "object" ? event.payload_json as Record<string, unknown> : {};
+}
+
+function modeFromPayload(payload: Record<string, unknown>): "OFFSHORE" | "ICE" {
+  return payload.mode === "ICE" ? "ICE" : "OFFSHORE";
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 /**
  * Rebuild trip_state projection from event stream
  */
@@ -33,10 +67,7 @@ export async function rebuildTripState(
   let rebuiltCount = 0;
 
   try {
-    // Sort events by device timestamp
-    const sortedEvents = [...events].sort((a, b) =>
-      new Date(a.ts_device).getTime() - new Date(b.ts_device).getTime()
-    );
+    const sortedEvents = orderProjectionEvents(events);
 
     // Build trip state from events
     const tripState: Record<string, unknown> = {
@@ -50,13 +81,14 @@ export async function rebuildTripState(
 
     for (const event of sortedEvents) {
       try {
-        const payload = event.payload_json as Record<string, unknown>;
+        const payload = payloadOf(event);
 
         switch (event.event_type) {
           case "TRIP_PLANNED":
             tripState.status = "PLANNED";
             tripState.location_name = payload.location_name;
-            tripState.owner_id = event.actor_id;
+            tripState.owner_id = payload.owner_id ?? event.actor_id;
+            tripState.mode = modeFromPayload(payload);
             break;
 
           case "TRIP_STARTED":
@@ -104,23 +136,26 @@ export async function rebuildTripState(
       await sql`
         insert into trip_state (
           trip_id, tenant_id, mode, owner_id, status, started_at, ended_at,
-          location_name, completion_meter, compliance_open_issues, latest_risk_tier
+          location_name, completion_meter, compliance_open_issues, latest_risk_tier, updated_at
         ) values (
-          ${tripId}, ${tenantId}, ${tripState.mode ?? "OFFSHORE"}, ${tripState.owner_id as string},
+          ${tripId}, ${tenantId}, ${tripState.mode as string}, ${String(tripState.owner_id ?? "system")},
           ${tripState.status as string}, ${tripState.started_at as string ?? null}::timestamptz,
           ${tripState.ended_at as string ?? null}::timestamptz,
           ${tripState.location_name as string ?? null},
           ${tripState.completion_meter as number}, ${tripState.compliance_open_issues as number},
-          ${tripState.latest_risk_tier as string}
+          ${tripState.latest_risk_tier as string}, now()
         )
         on conflict (trip_id) do update
-        set status = excluded.status,
+        set mode = excluded.mode,
+            owner_id = excluded.owner_id,
+            status = excluded.status,
             started_at = excluded.started_at,
             ended_at = excluded.ended_at,
             location_name = excluded.location_name,
             completion_meter = excluded.completion_meter,
             compliance_open_issues = excluded.compliance_open_issues,
-            latest_risk_tier = excluded.latest_risk_tier
+            latest_risk_tier = excluded.latest_risk_tier,
+            updated_at = now()
       `;
     });
 
@@ -162,17 +197,17 @@ export async function rebuildGearStateOffshore(
 
   const gearStates = new Map<string, Record<string, unknown>>();
 
-  const gearEvents = events.filter(e =>
+  const gearEvents = orderProjectionEvents(events).filter(e =>
     ["GEAR_REGISTERED", "GEAR_SET", "GEAR_CHECKED", "GEAR_HAULED", "GEAR_MARKED_MISSING",
      "GEAR_RECOVERED", "GEAR_REMOVED", "GEAR_RECOVERY_PLAN_CREATED", "STRING_STORM_PRIORITY_SET"].includes(e.event_type)
   );
 
   for (const event of gearEvents) {
     try {
-      const payload = event.payload_json as Record<string, unknown>;
+      const payload = payloadOf(event);
       const gearId = payload.gear_id as string;
 
-      if (!gearId) continue;
+      if (!gearId || modeFromPayload(payload) !== "OFFSHORE") continue;
 
       let state = gearStates.get(gearId) || {
         gear_id: gearId,
@@ -180,17 +215,26 @@ export async function rebuildGearStateOffshore(
         mode: "OFFSHORE",
         status: "REGISTERED",
         last_seen_at: event.ts_device,
-        metadata: {}
+        last_position: null,
+        set_time: null,
+        buoy_label: null,
+        pot_count: null,
+        line_length_m: null,
+        target_depth_m: null
       };
 
       switch (event.event_type) {
         case "GEAR_REGISTERED":
           state.status = "REGISTERED";
-          state.metadata = { ...state.metadata as object, registered_at: event.ts_device };
+          state.buoy_label = payload.buoy_label ?? state.buoy_label;
+          state.pot_count = payload.pot_count ?? state.pot_count;
+          state.line_length_m = payload.line_length_m ?? state.line_length_m;
+          state.target_depth_m = payload.target_depth_m ?? state.target_depth_m;
           break;
         case "GEAR_SET":
           state.status = "SET";
-          if (payload.location) state.last_position = payload.location;
+          state.set_time = event.ts_device;
+          if (payload.position ?? payload.location) state.last_position = payload.position ?? payload.location;
           break;
         case "GEAR_CHECKED":
           state.status = "CHECKED";
@@ -210,9 +254,6 @@ export async function rebuildGearStateOffshore(
         case "GEAR_REMOVED":
           state.status = "REMOVED";
           break;
-        case "STRING_STORM_PRIORITY_SET":
-          state.metadata = { ...state.metadata as object, storm_priority: payload.priority };
-          break;
       }
 
       gearStates.set(gearId, state);
@@ -225,26 +266,34 @@ export async function rebuildGearStateOffshore(
     }
   }
 
-  // Persist all gear states
-  for (const [, state] of gearStates) {
-    await withTenant(env, tenantId, async (sql) => {
+  await withTenant(env, tenantId, async (sql) => {
+    await sql`delete from gear_state_offshore where tenant_id = ${tenantId} and trip_id = ${tripId}`;
+
+    for (const [, state] of gearStates) {
       await sql`
         insert into gear_state_offshore (
-          gear_id, tenant_id, trip_id, status, last_seen_at, last_position, metadata
+          gear_id, tenant_id, trip_id, status, buoy_label, pot_count, line_length_m,
+          target_depth_m, set_time, last_position, updated_at
         ) values (
           ${state.gear_id as string}, ${tenantId}, ${tripId}, ${state.status as string},
-          ${state.last_seen_at as string}::timestamptz,
+          ${state.buoy_label as string | null}, ${state.pot_count as number | null},
+          ${state.line_length_m as number | null}, ${state.target_depth_m as number | null},
+          ${state.set_time as string | null}::timestamptz,
           ${state.last_position ? JSON.stringify(state.last_position) : null}::jsonb,
-          ${JSON.stringify(state.metadata)}::jsonb
+          now()
         )
         on conflict (gear_id) do update
         set status = excluded.status,
-            last_seen_at = excluded.last_seen_at,
+            buoy_label = excluded.buoy_label,
+            pot_count = excluded.pot_count,
+            line_length_m = excluded.line_length_m,
+            target_depth_m = excluded.target_depth_m,
+            set_time = excluded.set_time,
             last_position = excluded.last_position,
-            metadata = excluded.metadata
+            updated_at = now()
       `;
-    });
-  }
+    }
+  });
 
   const completedAt = new Date();
 
@@ -271,35 +320,59 @@ export async function rebuildCatchRollups(
   const errors: Array<{ id: string; error: string }> = [];
   let rebuiltCount = 0;
 
-  const speciesRollups = new Map<string, { species: string; count: number; total_weight: number; avg_length: number }>();
+  const catchRecords = new Map<string, {
+    catch_id: string;
+    species: string;
+    mode: "OFFSHORE" | "ICE";
+    kept: boolean;
+    weight_kg: number;
+    length_cm: number;
+  }>();
 
-  const catchEvents = events.filter(e =>
+  const catchEvents = orderProjectionEvents(events).filter(e =>
     ["CATCH_RECORDED", "CATCH_CORRECTED"].includes(e.event_type)
   );
 
   for (const event of catchEvents) {
     try {
-      const payload = event.payload_json as Record<string, unknown>;
-      const species = payload.species as string;
+      const payload = payloadOf(event);
+      const catchId = String(payload.catch_id ?? "");
 
-      if (!species) continue;
+      if (!catchId) continue;
 
-      let rollup = speciesRollups.get(species) || {
-        species,
-        count: 0,
-        total_weight: 0,
-        avg_length: 0
-      };
+      if (event.event_type === "CATCH_RECORDED") {
+        const species = String(payload.species ?? "");
+        if (!species) continue;
 
-      if (event.event_type === "CATCH_RECORDED" && payload.kept !== false) {
-        rollup.count++;
-        if (payload.weight_kg) rollup.total_weight += payload.weight_kg as number;
-        if (payload.length_cm) {
-          rollup.avg_length = (rollup.avg_length * (rollup.count - 1) + (payload.length_cm as number)) / rollup.count;
+        catchRecords.set(catchId, {
+          catch_id: catchId,
+          species,
+          mode: modeFromPayload(payload),
+          kept: payload.kept !== false,
+          weight_kg: finiteNumber(payload.weight_kg),
+          length_cm: finiteNumber(payload.length_cm)
+        });
+      } else {
+        const current = catchRecords.get(catchId);
+        const corrections = payload.corrections && typeof payload.corrections === "object"
+          ? payload.corrections as Record<string, unknown>
+          : {};
+        if (current) {
+          catchRecords.set(catchId, {
+            ...current,
+            species: typeof corrections.species === "string" ? corrections.species : current.species,
+            mode: corrections.mode === "ICE" || corrections.mode === "OFFSHORE" ? corrections.mode : current.mode,
+            kept: typeof corrections.kept === "boolean" ? corrections.kept : current.kept,
+            weight_kg: typeof corrections.weight_kg === "number" && Number.isFinite(corrections.weight_kg)
+              ? corrections.weight_kg
+              : current.weight_kg,
+            length_cm: typeof corrections.length_cm === "number" && Number.isFinite(corrections.length_cm)
+              ? corrections.length_cm
+              : current.length_cm
+          });
         }
       }
 
-      speciesRollups.set(species, rollup);
       rebuiltCount++;
     } catch (err) {
       errors.push({
@@ -309,23 +382,64 @@ export async function rebuildCatchRollups(
     }
   }
 
-  // Persist rollups
-  for (const [, rollup] of speciesRollups) {
-    await withTenant(env, tenantId, async (sql) => {
+  const speciesRollups = new Map<string, {
+    rollup_id: string;
+    species: string;
+    mode: "OFFSHORE" | "ICE";
+    kept_count: number;
+    released_count: number;
+    total_weight_kg: number;
+    total_length_cm: number;
+    evidence_count: number;
+  }>();
+
+  for (const record of catchRecords.values()) {
+    const key = `${record.mode}:${record.species}`;
+    const current = speciesRollups.get(key) ?? {
+      rollup_id: `${tripId}:${key}`,
+      species: record.species,
+      mode: record.mode,
+      kept_count: 0,
+      released_count: 0,
+      total_weight_kg: 0,
+      total_length_cm: 0,
+      evidence_count: 0
+    };
+
+    if (record.kept) {
+      current.kept_count += 1;
+    } else {
+      current.released_count += 1;
+    }
+    current.total_weight_kg += record.weight_kg;
+    current.total_length_cm += record.length_cm;
+    current.evidence_count += 1;
+    speciesRollups.set(key, current);
+  }
+
+  await withTenant(env, tenantId, async (sql) => {
+    await sql`delete from catch_rollups where tenant_id = ${tenantId} and trip_id = ${tripId}`;
+
+    for (const [, rollup] of speciesRollups) {
       await sql`
         insert into catch_rollups (
-          trip_id, tenant_id, species, count, total_weight_kg, avg_length_cm
+          rollup_id, tenant_id, trip_id, mode, species, kept_count, released_count,
+          total_weight_kg, total_length_cm, evidence_count, updated_at
         ) values (
-          ${tripId}, ${tenantId}, ${rollup.species}, ${rollup.count},
-          ${rollup.total_weight}, ${rollup.avg_length}
+          ${rollup.rollup_id}, ${tenantId}, ${tripId}, ${rollup.mode}, ${rollup.species},
+          ${rollup.kept_count}, ${rollup.released_count}, ${rollup.total_weight_kg},
+          ${rollup.total_length_cm}, ${rollup.evidence_count}, now()
         )
-        on conflict (trip_id, species) do update
-        set count = excluded.count,
+        on conflict (rollup_id) do update
+        set kept_count = excluded.kept_count,
+            released_count = excluded.released_count,
             total_weight_kg = excluded.total_weight_kg,
-            avg_length_cm = excluded.avg_length_cm
+            total_length_cm = excluded.total_length_cm,
+            evidence_count = excluded.evidence_count,
+            updated_at = now()
       `;
-    });
-  }
+    }
+  });
 
   const completedAt = new Date();
 
@@ -358,7 +472,7 @@ export async function rebuildAllProjections(
       from ops_event
       where tenant_id = ${tenantId}
         and (payload_json->>'trip_id' = ${tripId} or subject_id = ${tripId})
-      order by ts_device asc
+      order by ts_server asc, event_id asc
     ` as Promise<OpsEvent[]>;
   });
 

@@ -57,10 +57,19 @@ pnpm test
 4. Update docs for behavior or architecture changes.
 5. Open PR with test notes.
 
+For production-like promotion, follow `docs/OPERATIONS_RUNBOOK.md` and attach the evidence packet described there.
+
 ## Notes
 
 - `legacy-apps/` contains historical mobile implementations and is reference-only.
 - New field features should be added to `apps/mobile-ops`.
 - Vessel-mounted bridge/deck workflows belong in `apps/tablet-ops`.
-- For production-like browser builds, do not place bearer tokens in `VITE_*` variables. The frontend expects a runtime session token in `sessionStorage` or `localStorage` under `northline.apiToken` until a full sign-in shell is added.
-- Outside development, configure `CORS_ORIGIN` on the API as a comma-separated allowlist for deployed web origins.
+- For production-like browser builds, do not place bearer tokens in `VITE_*` variables. The frontend session gate collects a runtime token, stores it in `sessionStorage` or `localStorage` under `northline.apiToken`, and verifies it against `/v1/auth/session` before rendering.
+- If `AUTH_LOGIN_URL` is configured, the session gate shows an identity-provider sign-in action. Redirects can hand tokens back through `#access_token=...`, `#id_token=...`, or `?token=...`; the token is stored and then removed from browser history before session verification.
+- Outside development, configure `CORS_ORIGIN` on the API as a comma-separated allowlist for deployed HTTP(S) web origins, without paths.
+- Outside development, configure an importable RS256 `JWT_PUBLIC_KEY`, an HTTPS `JWT_ISSUER`, and `JWT_AUDIENCE` so the API rejects tokens from unexpected issuers or clients. Production-like JWTs must include `sub`, `tenant_id`, a valid Northline `role`, and `exp`; the API fails closed instead of defaulting missing claims.
+- Configure `RATE_LIMIT_MAX_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS` per environment if the default API throttle of 120 requests per minute is not appropriate. Staging and production readiness require the `RATE_LIMITER` Durable Object binding so throttles are coordinated across Worker isolates.
+- Configure an HTTPS `OBSERVABILITY_WEBHOOK_URL` and `OBSERVABILITY_WEBHOOK_TOKEN` outside development to export structured request, error, and authorization-denial events to an authenticated external collector. Errors and authorization denials are always emitted when configured; request events respect `OBSERVABILITY_SAMPLE_RATE`.
+- Sync uploads in staging/production require registered device signatures. Local development can use `dev:*` signatures to keep PWA workflows fast.
+- Sensitive operations such as device administration, ruleset changes, compliance signing, and export generation write audit records that admins can inspect through `/v1/audit/events`; outside development, audit write failures fail the operation closed.
+- To validate migrations against a live Postgres-compatible database, set `NORTHLINE_TEST_DATABASE_URL` and run `pnpm test:db`. The test creates and drops an isolated schema.

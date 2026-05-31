@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { validateOptionalQueryParam } from "../lib/route-params";
 
 const transitionSchema = z.object({
   trip_id: z.string().min(3),
@@ -21,7 +22,7 @@ const transitionSchema = z.object({
 const sweepSchema = z.object({
   trip_id: z.string().min(3),
   mode: z.enum(["OFFSHORE", "ICE"]),
-  outstanding_gear_ids: z.array(z.string()).default([])
+  outstanding_gear_ids: z.array(z.string().min(2)).max(500).default([])
 });
 
 const eventTypeByTransition = {
@@ -137,7 +138,12 @@ gearRouter.post("/sweep-check", async (c) => {
 gearRouter.get("/trip/:tripId", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const mode = c.req.query("mode");
+  const modeResult = validateOptionalQueryParam("mode", c.req.query("mode"));
+  if (!modeResult.ok) return c.json(modeResult.error, 400);
+  const mode = modeResult.value;
+  if (mode !== undefined && mode !== "OFFSHORE" && mode !== "ICE") {
+    return c.json({ error: "invalid_query_param", param: "mode", message: "mode must be OFFSHORE or ICE" }, 400);
+  }
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     if (mode === "OFFSHORE") {

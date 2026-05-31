@@ -61,8 +61,8 @@ Single React/Vite workspace
 | --- | --- | --- |
 | Responsive UI | Ready for current QA scope | Browser evidence covers desktop, phone, and tablet viewports. |
 | PWA plumbing | Ready for active apps | Vite PWA build output exists for web, mobile, and tablet apps. |
-| Offline-first data model | Partially ready | Event sync and local queues exist; more interrupted-network drills are still needed. |
-| Production auth | Launch blocker until integrated | Deployed builds must use runtime JWT/session tokens, not static `VITE_*` bearer tokens. |
+| Offline-first data model | Strong local path | Event sync and durable local queues exist; queued field events are signed with a browser-held device key outside development, but repeated production-like interrupted-network drills are still needed. |
+| Production auth | Requires environment verification | Deployed builds use runtime JWT/session tokens; configure `AUTH_LOGIN_URL`, `JWT_PUBLIC_KEY`, `JWT_ISSUER`, and `JWT_AUDIENCE` per environment. |
 | Production API CORS | Requires deploy config | Set `CORS_ORIGIN` per deployed environment. |
 | Native device features | Future work | Camera, GPS, vibration, wake lock, and push notifications can be added through PWA APIs. |
 
@@ -78,12 +78,12 @@ Single React/Vite workspace
 
 ## Immediate Strategy
 
-1. Add a real sign-in/token acquisition shell that writes a runtime token under `northline.apiToken`.
+1. Configure `AUTH_LOGIN_URL` for the production identity provider and verify redirect handoff through `#access_token`, `#id_token`, or `?token`.
 2. Configure `CORS_ORIGIN` for staging and production API deployments.
 3. Validate install polish across all three active PWAs: icons, splash screens, standalone display mode, and service-worker update behavior.
-4. Run offline recovery drills: API unavailable, partial sync failure, browser reload with queued work, and service-worker refresh.
+4. Run offline recovery drills: API unavailable, partial sync failure, browser reload with queued signed work, and service-worker refresh.
 5. Keep native wrappers out of scope unless distribution, device management, or push-notification requirements force them.
 
 ## Conclusion
 
-Stick with PWA as the product strategy. It matches the operating environment and keeps the codebase focused. The serious remaining launch risks are security, auth, deployment configuration, and recovery validation, not the device strategy itself.
+Stick with PWA as the product strategy. It matches the operating environment and keeps the codebase focused. The serious remaining launch risks are deployed identity-provider verification, environment configuration, and recovery validation, not the device strategy itself.

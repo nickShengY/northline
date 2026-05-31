@@ -1,9 +1,15 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { computeRisk } from "../services/risk";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { fitsJsonByteLimit } from "../lib/json-size";
+import { validateOptionalQueryParam, validateRouteParam } from "../lib/route-params";
+
+const pointSchema = z.object({ lat: z.number().gte(-90).lte(90), lon: z.number().gte(-180).lte(180) });
 
 const riskInputSchema = z.object({
   mode: z.enum(["OFFSHORE", "ICE"]),
@@ -47,7 +53,18 @@ const checkinStatusSchema = z.object({
   location: z.object({ lat: z.number().gte(-90).lte(90), lon: z.number().gte(-180).lte(180) }).optional()
 });
 
-export const safetyRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+const shelterHeaterFlagSchema = z.object({
+  trip_id: z.string().min(3),
+  shelter_id: z.string().max(100).optional(),
+  reason: z.string().max(500).optional()
+});
+
+const shelterCoReminderAckSchema = z.object({
+  trip_id: z.string().min(3),
+  shelter_id: z.string().max(100).optional()
+});
+
+export const safetyRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 safetyRouter.post("/risk/score", async (c) => {
   const body = await c.req.json();
@@ -216,7 +233,16 @@ safetyRouter.post("/hazard/:hazardId/confirm", async (c) => {
 
 safetyRouter.get("/hazards", async (c) => {
   const auth = c.get("auth");
-  const scope = c.req.query("scope");
+  const scopeResult = validateOptionalQueryParam("scope", c.req.query("scope"));
+  if (!scopeResult.ok) return c.json(scopeResult.error, 400);
+  const scope = scopeResult.value;
+  if (scope !== undefined && !["PRIVATE", "GROUP", "ORG", "DELAYED_PUBLIC", "PUBLIC"].includes(scope)) {
+    return c.json({
+      error: "invalid_query_param",
+      param: "scope",
+      message: "scope must be PRIVATE, GROUP, ORG, DELAYED_PUBLIC, or PUBLIC"
+    }, 400);
+  }
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return scope
@@ -394,14 +420,20 @@ const mobStartSchema = z.object({
   workflow_id: z.string().min(3),
   trip_id: z.string().min(3),
   victim_id: z.string().optional(),
-  last_known_location: z.object({ lat: z.number(), lon: z.number() }).optional()
+  last_known_location: pointSchema.optional()
 });
 
 const mobUpdateSchema = z.object({
   workflow_id: z.string().min(3),
-  checklist_json: z.record(z.unknown()).optional(),
-  roles_assigned: z.record(z.string()).optional(),
-  last_known_location: z.object({ lat: z.number(), lon: z.number() }).optional(),
+  checklist_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(32 * 1024),
+    "checklist_json must be 32768 bytes or less"
+  ).optional(),
+  roles_assigned: z.record(z.string()).refine(
+    fitsJsonByteLimit(8 * 1024),
+    "roles_assigned must be 8192 bytes or less"
+  ).optional(),
+  last_known_location: pointSchema.optional(),
   notes: z.string().max(1000).optional()
 });
 
@@ -482,12 +514,30 @@ safetyRouter.post("/mob/update", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "safety.mob_update",
+    subjectType: "SAFETY",
+    subjectId: row.workflow_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_id: row.trip_id,
+      status: row.status,
+      emitted_event_id: emitted.event_id
+    }
+  });
+
   return c.json({ ok: true, workflow: row, emitted_event_id: emitted.event_id });
 });
 
-safetyRouter.post("/mob/:workflowId/complete", async (c) => {
+safetyRouter.post("/mob/:workflowId/complete", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const workflowId = c.req.param("workflowId");
+  const parsedWorkflowId = validateRouteParam("workflowId", c.req.param("workflowId"));
+  if (!parsedWorkflowId.ok) {
+    return c.json(parsedWorkflowId.error, 400);
+  }
+  const workflowId = parsedWorkflowId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -515,6 +565,20 @@ safetyRouter.post("/mob/:workflowId/complete", async (c) => {
       workflow_id: row.workflow_id,
       trip_id: row.trip_id,
       status: "RESCUED"
+    }
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "safety.mob_complete",
+    subjectType: "SAFETY",
+    subjectId: row.workflow_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_id: row.trip_id,
+      status: row.status,
+      emitted_event_id: emitted.event_id
     }
   });
 
@@ -591,7 +655,11 @@ safetyRouter.post("/stop-work/trigger", async (c) => {
 
 safetyRouter.post("/stop-work/:stopId/acknowledge", async (c) => {
   const auth = c.get("auth");
-  const stopId = c.req.param("stopId");
+  const parsedStopId = validateRouteParam("stopId", c.req.param("stopId"));
+  if (!parsedStopId.ok) {
+    return c.json(parsedStopId.error, 400);
+  }
+  const stopId = parsedStopId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -607,12 +675,31 @@ safetyRouter.post("/stop-work/:stopId/acknowledge", async (c) => {
     return c.json({ ok: false, reason: "stop_not_found" }, 404);
   }
 
-  return c.json({ ok: true, stop: rows[0] });
+  const row = rows[0] as { stop_id: string; trip_id: string; reason: string; severity: number };
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "safety.stop_work_acknowledge",
+    subjectType: "SAFETY",
+    subjectId: row.stop_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_id: row.trip_id,
+      severity: row.severity
+    }
+  });
+
+  return c.json({ ok: true, stop: row });
 });
 
-safetyRouter.post("/stop-work/:stopId/clear", async (c) => {
+safetyRouter.post("/stop-work/:stopId/clear", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const stopId = c.req.param("stopId");
+  const parsedStopId = validateRouteParam("stopId", c.req.param("stopId"));
+  if (!parsedStopId.ok) {
+    return c.json(parsedStopId.error, 400);
+  }
+  const stopId = parsedStopId.value;
   const body = await c.req.json().catch(() => ({}));
   const resolutionNotes = (body as { notes?: string }).notes;
 
@@ -647,6 +734,20 @@ safetyRouter.post("/stop-work/:stopId/clear", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "safety.stop_work_clear",
+    subjectType: "SAFETY",
+    subjectId: row.stop_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_id: row.trip_id,
+      severity: row.severity,
+      emitted_event_id: emitted.event_id
+    }
+  });
+
   return c.json({ ok: true, stop: row, emitted_event_id: emitted.event_id });
 });
 
@@ -675,7 +776,10 @@ const briefingSchema = z.object({
   trip_id: z.string().min(3),
   mode: z.enum(["OFFSHORE", "ICE"]),
   briefing_type: z.enum(["PRE_TRIP", "TOOLBOX_TALK", "STORM_PREP", "HAZARD_ALERT"]),
-  checklist_json: z.record(z.unknown())
+  checklist_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(32 * 1024),
+    "checklist_json must be 32768 bytes or less"
+  )
 });
 
 safetyRouter.post("/briefing", async (c) => {
@@ -771,17 +875,22 @@ safetyRouter.get("/briefings/:tripId", async (c) => {
 // Shelter heater/CO reminder endpoints
 safetyRouter.post("/shelter/heater-flag", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json() as { trip_id: string; shelter_id?: string; reason?: string };
+  const body = await c.req.json();
+  const parsed = shelterHeaterFlagSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
+  }
 
   const emitted = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "GROUP",
-    subject_id: body.trip_id,
+    subject_id: parsed.data.trip_id,
     actor_id: auth.actorId,
     event_type: "SHELTER_HEATER_FLAGGED",
     payload_json: {
-      trip_id: body.trip_id,
-      shelter_id: body.shelter_id,
-      reason: body.reason,
+      trip_id: parsed.data.trip_id,
+      shelter_id: parsed.data.shelter_id,
+      reason: parsed.data.reason,
       flagged_at: new Date().toISOString()
     }
   });
@@ -791,16 +900,21 @@ safetyRouter.post("/shelter/heater-flag", async (c) => {
 
 safetyRouter.post("/shelter/co-reminder-ack", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json() as { trip_id: string; shelter_id?: string };
+  const body = await c.req.json();
+  const parsed = shelterCoReminderAckSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
+  }
 
   const emitted = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "GROUP",
-    subject_id: body.trip_id,
+    subject_id: parsed.data.trip_id,
     actor_id: auth.actorId,
     event_type: "SHELTER_CO_REMINDER_ACKED",
     payload_json: {
-      trip_id: body.trip_id,
-      shelter_id: body.shelter_id,
+      trip_id: parsed.data.trip_id,
+      shelter_id: parsed.data.shelter_id,
       acked_at: new Date().toISOString()
     }
   });
@@ -817,8 +931,8 @@ safetyRouter.post("/near-miss", async (c) => {
     trip_id: z.string().min(3),
     category: z.enum(["PINCH_POINT", "LINE_TENSION", "SLIP", "FALL", "EQUIPMENT", "OTHER"]),
     description: z.string().min(10),
-    location: z.object({ lat: z.number(), lon: z.number() }).optional(),
-    witnesses: z.array(z.string()).optional()
+    location: pointSchema.optional(),
+    witnesses: z.array(z.string()).max(20).optional()
   }).safeParse(body);
 
   if (!parsed.success) {
@@ -851,7 +965,10 @@ safetyRouter.post("/playbook/trigger", async (c) => {
     playbook_id: z.string().min(2),
     trip_id: z.string().min(3),
     trigger_reason: z.string().min(3),
-    context_json: z.record(z.unknown()).optional()
+    context_json: z.record(z.unknown()).refine(
+      fitsJsonByteLimit(16 * 1024),
+      "context_json must be 16384 bytes or less"
+    ).optional()
   }).safeParse(body);
 
   if (!parsed.success) {

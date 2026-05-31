@@ -9,14 +9,28 @@ export interface Env {
   APP_ENV: "development" | "staging" | "production";
   NEON_DATABASE_URL?: string;
   JWT_PUBLIC_KEY?: string;
+  JWT_ISSUER?: string;
+  JWT_AUDIENCE?: string;
+  AUTH_LOGIN_URL?: string;
+  AUTH_CLIENT_ID?: string;
+  AUTH_SCOPES?: string;
   CORS_ORIGIN?: string;
+  RATE_LIMIT_MAX_REQUESTS?: string;
+  RATE_LIMIT_WINDOW_SECONDS?: string;
+  RATE_LIMIT_NAMESPACE?: string;
+  READINESS_CHECK_DATABASE?: string;
+  OBSERVABILITY_WEBHOOK_URL?: string;
+  OBSERVABILITY_WEBHOOK_TOKEN?: string;
+  OBSERVABILITY_SAMPLE_RATE?: string;
   SIGNING_SECRET?: string;
   R2_BUCKET: ObjectBucket;
+  RATE_LIMITER?: DurableObjectNamespace;
   DB?: D1Database;
   // AIS Proxy configuration
   AIS_PROXY_URL?: string;
   AISSTREAM_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
+  AIS_AI_TIMEOUT_MS?: string;
 }
 
 export interface D1Database {

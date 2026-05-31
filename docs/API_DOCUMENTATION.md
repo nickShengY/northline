@@ -23,6 +23,22 @@ Authorization: Bearer <JWT_TOKEN>
 
 ## API Endpoints
 
+### Platform Health
+
+#### Liveness
+```http
+GET /health
+```
+
+Returns `200` when the Worker is reachable.
+
+#### Readiness
+```http
+GET /ready
+```
+
+Returns deployment checks for database, artifact storage, CORS, and JWT controls. Production-like environments return `503` until required controls are configured.
+
 ### Sync Service
 
 #### Upload Events
@@ -56,21 +72,35 @@ Authorization: Bearer <token>
 {
   "cursor": "2024-01-01T00:01:00Z",
   "accepted_count": 1,
-  "rejected": [],
-  "server_generated_events": []
+  "rejected": [
+    {
+      "event_id": "evt_rejected_001",
+      "reason": "hash_chain_conflict"
+    }
+  ],
+  "server_generated_events": [
+    {
+      "event_type": "SYNC_VALIDATION_REJECTED",
+      "ts_server": "2024-01-01T00:01:00Z",
+      "payload_json": {
+        "event_id": "evt_rejected_001",
+        "reason": "hash_chain_conflict"
+      }
+    }
+  ]
 }
 ```
 
 #### Download Events
 ```http
-GET /v1/sync/download?cursor=2024-01-01T00:00:00Z&limit=100
+GET /v1/sync/download?cursor=2024-01-01T00:00:00Z|evt_001&limit=100
 Authorization: Bearer <token>
 ```
 
 **Response**:
 ```json
 {
-  "cursor": "2024-01-01T00:05:00Z",
+  "cursor": "2024-01-01T00:05:00Z|evt_002",
   "events": [
     {
       "event_id": "01H8X9Y7Z6W5V4U3T2R1Q0P9O8N7M6L5K4J3H2G1F",
@@ -232,6 +262,8 @@ Authorization: Bearer <token>
 
 ### AI Service
 
+AIS AI endpoints are authenticated and bounded for operational predictability. Request bodies are limited to 64 KiB. Risk assessment accepts at most 25 vessels per request, and behavior analysis accepts at most 500 observations. When `OPENROUTER_API_KEY` is not configured, or the upstream model call fails or times out, the API returns deterministic local fallback analysis with `ai_enhanced: false`.
+
 #### Risk Assessment
 ```http
 POST /v1/ais/risk/assess
@@ -351,9 +383,25 @@ Authorization: Bearer <token>
 
 ## Rate Limiting
 
-- **Sync endpoints**: 100 requests/minute
-- **AI endpoints**: 10 requests/minute
-- **Other endpoints**: 1000 requests/minute
+All `/v1/*` routes are throttled by client address, route, and token fingerprint. Defaults are 120 requests per 60-second window and can be tuned with `RATE_LIMIT_MAX_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS`. Production deployments use the `RATE_LIMITER` Durable Object binding for cross-isolate coordination.
+
+### Register Current User Device
+
+```http
+POST /v1/sync/device/register-self
+Authorization: Bearer <jwt>
+Content-Type: application/json
+
+{
+  "device_id": "mobile_crew_1_abcd1234",
+  "public_key": "<base64url-ed25519-public-key>",
+  "key_version": 1
+}
+```
+
+Registers the caller's own `USER` device signing key. The API derives `tenant_id`, `subject_id`, and actor metadata from the authenticated session; clients cannot use this endpoint to register keys for another user, vessel, group, or organization.
+
+Responses include `ratelimit-limit`, `ratelimit-remaining`, and `ratelimit-reset`; limited requests return HTTP `429` with `retry-after`.
 
 ## Pagination
 

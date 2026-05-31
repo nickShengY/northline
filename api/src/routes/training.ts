@@ -1,9 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
 import { recommendTrainingModules } from "../services/training";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { fitsJsonByteLimit } from "../lib/json-size";
+import { validateOptionalQueryParam, validateRouteParam } from "../lib/route-params";
 
 const assignSchema = z.object({
   assign_id: z.string().optional(),
@@ -33,15 +37,21 @@ const moduleUpsertSchema = z.object({
   mode: z.enum(["OFFSHORE", "ICE", "BOTH"]),
   title: z.string().min(3),
   duration_sec: z.number().int().min(30),
-  quiz_json: z.record(z.unknown()).optional(),
-  prerequisites: z.array(z.string()).default([]),
-  metadata_json: z.record(z.unknown()).default({}),
+  quiz_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(32 * 1024),
+    "quiz_json must be 32768 bytes or less"
+  ).optional(),
+  prerequisites: z.array(z.string()).max(20).default([]),
+  metadata_json: z.record(z.unknown()).default({}).refine(
+    fitsJsonByteLimit(16 * 1024),
+    "metadata_json must be 16384 bytes or less"
+  ),
   active: z.boolean().default(true)
 });
 
-export const trainingRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const trainingRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
-trainingRouter.post("/assign", async (c) => {
+trainingRouter.post("/assign", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = assignSchema.safeParse(body);
@@ -80,6 +90,21 @@ trainingRouter.post("/assign", async (c) => {
       module_id: parsed.data.module_id,
       reason: parsed.data.reason,
       due_at: parsed.data.due_at
+    }
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "training.assign",
+    subjectType: "TRAINING_ASSIGNMENT",
+    subjectId: assignId,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      user_id: parsed.data.user_id,
+      module_id: parsed.data.module_id,
+      status: parsed.data.status,
+      emitted_event_id: emitted.event_id
     }
   });
 
@@ -150,7 +175,11 @@ trainingRouter.post("/recommend", async (c) => {
 
 trainingRouter.get("/user/:userId", async (c) => {
   const auth = c.get("auth");
-  const userId = c.req.param("userId");
+  const parsedUserId = validateRouteParam("userId", c.req.param("userId"));
+  if (!parsedUserId.ok) {
+    return c.json(parsedUserId.error, 400);
+  }
+  const userId = parsedUserId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -168,7 +197,11 @@ trainingRouter.get("/user/:userId", async (c) => {
 
 trainingRouter.get("/modules", async (c) => {
   const auth = c.get("auth");
-  const mode = c.req.query("mode");
+  const modeParamResult = validateOptionalQueryParam("mode", c.req.query("mode"));
+  if (!modeParamResult.ok) return c.json(modeParamResult.error, 400);
+  const modeResult = z.enum(["OFFSHORE", "ICE", "BOTH"]).optional().safeParse(modeParamResult.value);
+  if (!modeResult.success) return c.json({ error: "invalid_mode" }, 400);
+  const mode = modeResult.data;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return mode
@@ -194,7 +227,7 @@ trainingRouter.get("/modules", async (c) => {
   return c.json({ modules: rows });
 });
 
-trainingRouter.post("/modules/upsert", async (c) => {
+trainingRouter.post("/modules/upsert", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = moduleUpsertSchema.safeParse(body);
@@ -221,6 +254,20 @@ trainingRouter.post("/modules/upsert", async (c) => {
           metadata_json = excluded.metadata_json,
           active = excluded.active
     `;
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "training_module.upsert",
+    subjectType: "TRAINING_MODULE",
+    subjectId: parsed.data.module_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      mode: parsed.data.mode,
+      active: parsed.data.active,
+      duration_sec: parsed.data.duration_sec
+    }
   });
 
   return c.json({ ok: true, module_id: parsed.data.module_id });

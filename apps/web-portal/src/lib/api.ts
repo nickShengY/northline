@@ -1,15 +1,30 @@
+import { readRuntimeToken } from "@northline/shared";
+
 const base = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
-function getRuntimeToken() {
-  if (typeof window === "undefined") return undefined;
-  return window.sessionStorage.getItem("northline.apiToken") ?? window.localStorage.getItem("northline.apiToken") ?? undefined;
+export const defaultDevToken = "demoTenant:portal_admin:ORG_ADMIN";
+
+function pathSegment(value: string) {
+  return encodeURIComponent(value);
+}
+
+function queryString(params: Record<string, string | number | undefined>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const encoded = search.toString();
+  return encoded ? `?${encoded}` : "";
+}
+
+function boundedInteger(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
 function getAuthToken() {
   const token = import.meta.env.DEV
-    ? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN
-    : getRuntimeToken();
-  if (!token && import.meta.env.DEV) return "demoTenant:portal_admin:ORG_ADMIN";
+    ? readRuntimeToken() ?? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN ?? defaultDevToken
+    : readRuntimeToken();
   if (!token) {
     throw new Error("Missing API token. Sign in before using the Northline API.");
   }
@@ -23,6 +38,20 @@ const authHeader = {
   "Content-Type": "application/json"
 };
 
+export async function getSession() {
+  const res = await fetch(`${base}/v1/auth/session`, {
+    headers: { Authorization: authHeader.Authorization }
+  });
+  if (!res.ok) throw new Error("Session unavailable");
+  return res.json();
+}
+
+export async function getAuthConfig() {
+  const res = await fetch(`${base}/v1/auth/config`);
+  if (!res.ok) throw new Error("Auth configuration unavailable");
+  return res.json();
+}
+
 export async function getDashboard() {
   const res = await fetch(`${base}/v1/ops/dashboard`, { headers: authHeader });
   if (!res.ok) throw new Error("Failed to load dashboard");
@@ -30,13 +59,13 @@ export async function getDashboard() {
 }
 
 export async function getTripState(tripId: string) {
-  const res = await fetch(`${base}/v1/ops/trip/${tripId}/state`, { headers: authHeader });
+  const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/state`, { headers: authHeader });
   if (!res.ok) throw new Error("Failed to load trip state");
   return res.json();
 }
 
 export async function verifyCertificate(certificateId: string) {
-  const res = await fetch(`${base}/v1/trace/certificate/${certificateId}/verify`, { headers: authHeader });
+  const res = await fetch(`${base}/v1/trace/certificate/${pathSegment(certificateId)}/verify`, { headers: authHeader });
   if (!res.ok) throw new Error("Certificate not found");
   return res.json();
 }
@@ -91,7 +120,7 @@ export async function listLots() {
 }
 
 export async function signCompliance(tripId: string, pkgId: string) {
-  const res = await fetch(`${base}/v1/ops/trip/${tripId}/compliance/sign`, {
+  const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/compliance/sign`, {
     method: "POST",
     headers: authHeader,
     body: JSON.stringify({ pkg_id: pkgId })
@@ -119,7 +148,8 @@ export async function listTrips() {
 }
 
 export async function getTripTimeline(tripId: string, limit = 100) {
-  const res = await fetch(`${base}/v1/ops/trip/${tripId}/timeline?limit=${limit}`, {
+  const query = queryString({ limit: boundedInteger(limit, 1, 5000) });
+  const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/timeline${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
   if (!res.ok) throw new Error("Trip timeline failed");
@@ -127,8 +157,8 @@ export async function getTripTimeline(tripId: string, limit = 100) {
 }
 
 export async function listIntegrations(type?: string) {
-  const query = type ? `?type=${type}` : "";
-  const res = await fetch(`${base}/v1/integrations/configs${query}`, {
+  const query = queryString({ type });
+  const res = await fetch(`${base}/v1/integrations/status${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
   if (!res.ok) throw new Error("Integration listing failed");
@@ -152,7 +182,7 @@ export async function upsertIntegration(input: {
 }
 
 export async function testIntegration(integrationId: string) {
-  const res = await fetch(`${base}/v1/integrations/configs/${integrationId}/test`, {
+  const res = await fetch(`${base}/v1/integrations/configs/${pathSegment(integrationId)}/test`, {
     method: "POST",
     headers: authHeader
   });
@@ -161,7 +191,7 @@ export async function testIntegration(integrationId: string) {
 }
 
 export async function listRulesets(mode?: string) {
-  const query = mode ? `?mode=${mode}` : "";
+  const query = queryString({ mode });
   const res = await fetch(`${base}/v1/rules/all${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
@@ -212,7 +242,7 @@ export async function registerDevice(input: {
 }
 
 export async function revokeDevice(deviceId: string) {
-  const res = await fetch(`${base}/v1/sync/device/revoke/${deviceId}`, {
+  const res = await fetch(`${base}/v1/sync/device/revoke/${pathSegment(deviceId)}`, {
     method: "POST",
     headers: authHeader
   });
@@ -221,7 +251,8 @@ export async function revokeDevice(deviceId: string) {
 }
 
 export async function getSyncMetrics(hours = 24) {
-  const res = await fetch(`${base}/v1/sync/metrics/summary?hours=${hours}`, {
+  const query = queryString({ hours: boundedInteger(hours, 1, 168) });
+  const res = await fetch(`${base}/v1/sync/metrics/summary${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
   if (!res.ok) throw new Error("Sync metrics failed");
@@ -230,8 +261,8 @@ export async function getSyncMetrics(hours = 24) {
 
 // Gear API endpoints
 export async function getGearForTrip(tripId: string, mode?: "OFFSHORE" | "ICE") {
-  const query = mode ? `?mode=${mode}` : "";
-  const res = await fetch(`${base}/v1/gear/trip/${tripId}${query}`, {
+  const query = queryString({ mode });
+  const res = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
   if (!res.ok) throw new Error("Gear data unavailable");
@@ -240,7 +271,7 @@ export async function getGearForTrip(tripId: string, mode?: "OFFSHORE" | "ICE") 
 
 // Hazards API endpoint
 export async function getHazards(scope?: string) {
-  const query = scope ? `?scope=${scope}` : "";
+  const query = queryString({ scope });
   const res = await fetch(`${base}/v1/safety/hazards${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
@@ -250,10 +281,20 @@ export async function getHazards(scope?: string) {
 
 // Export API endpoint for historical data
 export async function getHistoricalMetrics(metricType: string, days = 30) {
-  const res = await fetch(`${base}/v1/sync/metrics/summary?hours=${days * 24}`, {
+  const query = queryString({ hours: boundedInteger(days * 24, 1, 168) });
+  const res = await fetch(`${base}/v1/sync/metrics/summary${query}`, {
     headers: { Authorization: authHeader.Authorization }
   });
   if (!res.ok) throw new Error("Historical metrics failed");
+  return res.json();
+}
+
+export async function listAuditEvents(limit = 25) {
+  const query = queryString({ limit: boundedInteger(limit, 1, 500) });
+  const res = await fetch(`${base}/v1/audit/events${query}`, {
+    headers: { Authorization: authHeader.Authorization }
+  });
+  if (!res.ok) throw new Error("Audit event listing failed");
   return res.json();
 }
 
@@ -360,5 +401,21 @@ export interface OpenIncidentsResponse {
     summary: string;
     opened_by: string;
     opened_at: string;
+  }>;
+}
+
+export interface AuditEventsResponse {
+  events: Array<{
+    audit_id: string;
+    tenant_id: string;
+    actor_id: string;
+    actor_role: string;
+    action: string;
+    subject_type: string;
+    subject_id: string;
+    outcome: string;
+    request_id?: string;
+    metadata_json?: Record<string, unknown>;
+    created_at: string;
   }>;
 }

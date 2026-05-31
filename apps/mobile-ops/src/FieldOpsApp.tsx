@@ -1,18 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   appendDraftEvent,
+  appendCachedServerEvents,
   clearDraftEvents,
+  clearSyncCursor,
+  hasDeviceChainRejection,
+  nextSyncUploadBatch,
   readDraftEvents,
+  readSyncCursor,
+  rejectedReasonCodes,
   removeDraftEvent,
-  replaceDraftEvents
+  remainingDraftEventsAfterBatchedUpload,
+  replaceDraftEvents,
+  updateDeviceChainHeadsFromAccepted,
+  writeSyncCursor
 } from "./lib/offlineLog";
+import { createSignedDraftEvent } from "./lib/draftEvent";
 import {
+  ackSyncCursor,
   completeCheckin,
+  downloadEvents,
+  getSession,
   getTripGear,
   listHazards,
   listTrips,
   parseDevToken,
   recommendTraining,
+  registerCurrentDevice,
   reportHazard,
   scheduleCheckin,
   scoreRisk,
@@ -23,7 +37,13 @@ import {
   type RiskScoreResult,
   type TrainingRecommendation
 } from "./lib/api";
-import { computeEventHash, type OpsEvent } from "@northline/shared";
+import {
+  clearDeviceIdentity,
+  generateAndStoreDeviceIdentity,
+  readDeviceIdentity,
+  type DeviceIdentitySummary
+} from "./lib/deviceIdentity";
+import { type OpsEvent } from "@northline/shared";
 import {
   Button,
   Card,
@@ -83,6 +103,12 @@ interface ActivityItem {
   tone: "info" | "success" | "warning" | "danger";
 }
 
+interface AuthIdentity {
+  tenantId: string;
+  actorId: string;
+  role: string;
+}
+
 interface Preferences {
   mode: Mode;
   tripId: string;
@@ -97,12 +123,43 @@ interface QuickCommand {
   run: () => void | Promise<void>;
 }
 
+interface SyncRepairReport {
+  attempted: number;
+  accepted: number;
+  rejected: Array<{ event_id?: string; reason: string }>;
+  deviceChainIssue: boolean;
+  checkedAt: string;
+}
+
 const modules: Array<{ id: Module; label: string }> = [
   { id: "safety", label: "Safety" },
   { id: "operations", label: "Operations" },
   { id: "hazards", label: "Hazards" },
   { id: "learning", label: "Training" }
 ];
+
+const moduleMeta: Record<Module, { label: string; description: string; icon: IconName }> = {
+  safety: {
+    label: "Safety",
+    description: "Gate checks, check-ins, and emergency actions",
+    icon: "ShieldCheck"
+  },
+  operations: {
+    label: "Operations",
+    description: "Risk scoring, gear state, and route confidence",
+    icon: "Radar"
+  },
+  hazards: {
+    label: "Hazards",
+    description: "Shared hazard feed and field reports",
+    icon: "AlertTriangle"
+  },
+  learning: {
+    label: "Training",
+    description: "Assignments matched to recent operating signals",
+    icon: "GraduationCap"
+  }
+};
 
 const PREFERENCES_KEY = "northline.mobile_ops.preferences";
 const NOTES_KEY = "northline.mobile_ops.shift_notes";
@@ -130,6 +187,33 @@ function formatEventLabel(eventType: string) {
   return labels[eventType] ?? eventType.replace(/_/g, " ").toLowerCase().replace(/^\w/, (char) => char.toUpperCase());
 }
 
+function readInitialAuthIdentity(): AuthIdentity {
+  const auth = parseDevToken();
+  return { tenantId: auth.tenantId, actorId: auth.actorId, role: auth.role };
+}
+
+function MetricTile({
+  label,
+  value,
+  tone = "neutral",
+  icon
+}: {
+  label: string;
+  value: string | number;
+  tone?: "neutral" | "good" | "warning" | "danger";
+  icon: IconName;
+}) {
+  return (
+    <div className={`metric-tile ${tone}`}>
+      <span className="metric-icon"><Icon name={icon} size={20} /></span>
+      <span>
+        <strong>{value}</strong>
+        <small>{label}</small>
+      </span>
+    </div>
+  );
+}
+
 export function FieldOpsApp() {
   const initialPrefs = useMemo<Preferences>(() => readStorageJson<Preferences>(PREFERENCES_KEY, {
     mode: "OFFSHORE",
@@ -144,6 +228,9 @@ export function FieldOpsApp() {
   const [syncState, setSyncState] = useState<SyncState>("SYNCED");
   const [statusMessage, setStatusMessage] = useState("Ready. Select a module to continue.");
   const [isOnline, setIsOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  const [authIdentity, setAuthIdentity] = useState<AuthIdentity>(() => readInitialAuthIdentity());
+  const [deviceIdentity, setDeviceIdentity] = useState<DeviceIdentitySummary>(() => readDeviceIdentity());
+  const [deviceRegistered, setDeviceRegistered] = useState(false);
 
   const [tripId, setTripId] = useState(initialPrefs.tripId);
   const [gearId, setGearId] = useState("STR-021");
@@ -156,6 +243,7 @@ export function FieldOpsApp() {
   const [gearRows, setGearRows] = useState<GearRow[]>([]);
   const [heaterOn, setHeaterOn] = useState(true);
   const [draftVersion, setDraftVersion] = useState(0);
+  const [drafts, setDrafts] = useState<OpsEvent<Record<string, unknown>>[]>([]);
   const [checklist, setChecklist] = useState({
     pinch: false,
     tension: false,
@@ -170,8 +258,8 @@ export function FieldOpsApp() {
     readStorageJson<ActivityItem[]>(ACTIVITY_KEY, [])
   );
   const [commandQuery, setCommandQuery] = useState("");
+  const [syncRepairReport, setSyncRepairReport] = useState<SyncRepairReport | null>(null);
 
-  const drafts = useMemo(() => readDraftEvents(), [draftVersion, syncState]);
   const offshoreReady = checklist.pinch && checklist.tension && checklist.comms && checklist.ppe && checklist.deck;
   const effectiveSyncState: SyncState = drafts.length > 0 && syncState === "SYNCED" ? "PENDING" : syncState;
   const syncClass = `sync-pill ${effectiveSyncState.toLowerCase()}`;
@@ -180,6 +268,7 @@ export function FieldOpsApp() {
     : drafts.length > 0
       ? `${drafts.length} draft ${drafts.length === 1 ? "event" : "events"} waiting to sync`
       : "Online and synced";
+  const deviceSigningReady = deviceIdentity.hasPrivateKey && Boolean(deviceIdentity.deviceId);
   const todayNotes = shiftNotes.slice(0, 4);
   const trackActivity = useMemo(
     () => (text: string, tone: ActivityItem["tone"] = "info") => {
@@ -204,6 +293,35 @@ export function FieldOpsApp() {
   useEffect(() => {
     localStorage.setItem(ACTIVITY_KEY, JSON.stringify(recentActivity));
   }, [recentActivity]);
+
+  useEffect(() => {
+    let mounted = true;
+    void getSession()
+      .then((session) => {
+        if (!mounted) return;
+        setAuthIdentity({
+          tenantId: session.tenant_id,
+          actorId: session.actor_id,
+          role: session.role
+        });
+      })
+      .catch(() => {
+        trackActivity("Session identity refresh failed; using local token identity.", "warning");
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [trackActivity]);
+
+  useEffect(() => {
+    let mounted = true;
+    void readDraftEvents().then((events) => {
+      if (mounted) setDrafts(events);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [draftVersion, syncState]);
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -304,25 +422,50 @@ export function FieldOpsApp() {
   }
 
   async function createDraftEvent(eventType: string, payload: Record<string, unknown>): Promise<OpsEvent<Record<string, unknown>>> {
-    const auth = parseDevToken();
-    const baseEvent = {
-      event_id: crypto.randomUUID(),
-      tenant_id: auth.tenantId,
-      subject_type: "USER" as const,
-      subject_id: auth.actorId,
-      actor_id: auth.actorId,
-      device_id: "mobile_ops_pwa",
-      ts_device: new Date().toISOString(),
-      event_type: eventType,
-      schema_version: 1,
-      payload_json: payload,
-      signature: `dev:${auth.actorId}`
-    };
+    return createSignedDraftEvent(authIdentity, deviceIdentity, eventType, payload, {
+      allowDevSignature: import.meta.env.DEV
+    });
+  }
 
-    return {
-      ...baseEvent,
-      event_hash: await computeEventHash(baseEvent)
-    };
+  async function handleGenerateDeviceIdentity() {
+    const next = await generateAndStoreDeviceIdentity(authIdentity.actorId);
+    setDeviceIdentity(next);
+    setDeviceRegistered(false);
+    setStatusMessage("Device signing key generated. Register the public key before production sync.");
+    trackActivity("Generated local device signing key.", "success");
+  }
+
+  async function handleRegisterDeviceIdentity() {
+    if (!deviceIdentity.deviceId || !deviceIdentity.publicKey) {
+      setStatusMessage("Generate a device signing key before registration.");
+      trackActivity("Device registration blocked: missing local key.", "warning");
+      return;
+    }
+
+    await runWithSync(
+      async () => {
+        await registerCurrentDevice({
+          device_id: deviceIdentity.deviceId as string,
+          public_key: deviceIdentity.publicKey as string,
+          key_version: 1
+        });
+        setDeviceRegistered(true);
+      },
+      {
+        successMessage: "Device signing key registered for this user.",
+        successActivity: "Registered current device signing key.",
+        errorMessage: "Device key registration failed. Try again when connected.",
+        errorActivity: "Device key registration failed."
+      }
+    );
+  }
+
+  function handleClearDeviceIdentity() {
+    clearDeviceIdentity();
+    setDeviceIdentity(readDeviceIdentity());
+    setDeviceRegistered(false);
+    setStatusMessage("Device signing key removed from this browser.");
+    trackActivity("Removed local device signing key.", "warning");
   }
 
   async function refreshAll() {
@@ -498,12 +641,29 @@ export function FieldOpsApp() {
       trackActivity("Haul authorization blocked: missing trip id.", "warning");
       return;
     }
-    const event = await createDraftEvent("SAFETY_PROMPT_ACKED", { trip_id: tripId, checklist });
-    appendDraftEvent(event);
-    setDraftVersion((value) => value + 1);
-    setSyncState("PENDING");
-    setStatusMessage("Checklist captured offline and queued for sync.");
-    trackActivity("Captured haul authorization checklist offline.", "warning");
+    try {
+      const event = await createDraftEvent("SAFETY_PROMPT_ACKED", { trip_id: tripId, checklist });
+      await appendDraftEvent(event);
+      setDraftVersion((value) => value + 1);
+      setSyncState("PENDING");
+      setStatusMessage("Checklist captured offline and queued for sync.");
+      trackActivity("Captured haul authorization checklist offline.", "warning");
+    } catch {
+      setSyncState("ERROR");
+      setStatusMessage("Device signing key is required before queueing production offline events.");
+      trackActivity("Offline event capture blocked: missing device signing key.", "danger");
+    }
+  }
+
+  async function pullServerEventsAfterQueueSync() {
+    const currentCursor = readSyncCursor();
+    const response = await downloadEvents(currentCursor, 500);
+    if (response.cursor && response.cursor !== currentCursor) {
+      await appendCachedServerEvents(response.events);
+      writeSyncCursor(response.cursor);
+      await ackSyncCursor(response.cursor);
+    }
+    return response.events.length;
   }
 
   async function handleSyncDrafts() {
@@ -513,19 +673,52 @@ export function FieldOpsApp() {
     }
     try {
       setSyncState("SYNCING");
-      const response = await uploadEvents(drafts);
-      const acceptedSet = new Set(response.accepted ?? []);
-      const remaining = drafts.filter((event) => !acceptedSet.has(event.event_id));
-      replaceDraftEvents(remaining);
+      const batch = nextSyncUploadBatch(drafts);
+      const response = await uploadEvents(batch, readSyncCursor());
+      updateDeviceChainHeadsFromAccepted(batch, response.accepted);
+      const rejectionCodes = rejectedReasonCodes(response);
+      setSyncRepairReport({
+        attempted: batch.length,
+        accepted: response.accepted?.length ?? response.accepted_count ?? 0,
+        rejected: response.rejected.map((item, index) => ({
+          event_id: item.event_id,
+          reason: rejectionCodes[index] ?? (typeof item.reason === "string" ? item.reason : JSON.stringify(item.reason))
+        })),
+        deviceChainIssue: hasDeviceChainRejection(response),
+        checkedAt: new Date().toISOString()
+      });
+      const remaining = remainingDraftEventsAfterBatchedUpload(drafts, response);
+      await replaceDraftEvents(remaining);
       setDraftVersion((value) => value + 1);
       if (remaining.length > 0) {
         setSyncState("PENDING");
-        setStatusMessage(`Partial sync complete. ${remaining.length} drafts still queued.`);
-        trackActivity("Partial queue sync completed.", "warning");
+        if (hasDeviceChainRejection(response)) {
+          setStatusMessage(`Device event chain needs reconciliation. ${remaining.length} drafts still queued.`);
+          trackActivity("Device chain rejection returned during queue sync.", "danger");
+        } else {
+          setStatusMessage(`Partial sync complete. ${remaining.length} drafts still queued. ${rejectionCodes.join(", ")}`);
+          trackActivity("Partial queue sync completed.", "warning");
+        }
       } else {
-        setSyncState("SYNCED");
-        setStatusMessage("Draft queue synced.");
-        trackActivity("Uploaded queued offline events.", "success");
+        try {
+          const downloadedCount = await pullServerEventsAfterQueueSync();
+          setSyncState("SYNCED");
+          setStatusMessage(
+            downloadedCount > 0
+              ? `Draft queue synced. Pulled ${downloadedCount} server ${downloadedCount === 1 ? "event" : "events"}.`
+              : "Draft queue synced."
+          );
+          trackActivity(
+            downloadedCount > 0
+              ? `Uploaded queued offline events and acknowledged ${downloadedCount} server events.`
+              : "Uploaded queued offline events.",
+            "success"
+          );
+        } catch {
+          setSyncState("ERROR");
+          setStatusMessage("Draft queue uploaded, but server download checkpoint failed.");
+          trackActivity("Queued events uploaded; download checkpoint failed.", "danger");
+        }
       }
     } catch {
       setSyncState("PENDING");
@@ -544,17 +737,52 @@ export function FieldOpsApp() {
     trackActivity("Exported queued draft events.", "info");
   }
 
-  function handleRemoveDraft(eventId: string) {
-    removeDraftEvent(eventId);
+  async function handleRemoveDraft(eventId: string) {
+    await removeDraftEvent(eventId);
     setDraftVersion((value) => value + 1);
     trackActivity(`Removed queued event ${eventId.slice(0, 8)}.`, "info");
   }
 
-  function handleClearQueue() {
-    clearDraftEvents();
+  async function handleClearQueue() {
+    await clearDraftEvents();
     setDraftVersion((value) => value + 1);
+    setSyncRepairReport(null);
     setStatusMessage("Draft queue cleared.");
     trackActivity("Cleared local draft queue.", "warning");
+  }
+
+  async function handleReconcileSyncChain() {
+    try {
+      setSyncState("SYNCING");
+      clearSyncCursor();
+      const response = await downloadEvents(null, 1000);
+      await appendCachedServerEvents(response.events);
+      if (response.cursor) {
+        writeSyncCursor(response.cursor);
+        await ackSyncCursor(response.cursor);
+      }
+      setSyncState(drafts.length ? "PENDING" : "SYNCED");
+      setStatusMessage(`Reconciled server event history. Retry sync with ${drafts.length} queued drafts.`);
+      trackActivity(`Reconciled ${response.events.length} server events for sync repair.`, "success");
+    } catch {
+      setSyncState("ERROR");
+      setStatusMessage("Sync repair failed. Keep the queue exported until connectivity and device trust are verified.");
+      trackActivity("Sync repair checkpoint failed.", "danger");
+    }
+  }
+
+  async function handleQuarantineRejectedDrafts() {
+    const rejectedIds = new Set(syncRepairReport?.rejected.map((item) => item.event_id).filter(Boolean));
+    if (!rejectedIds.size) {
+      setStatusMessage("No specific rejected event ids to quarantine.");
+      return;
+    }
+
+    const remaining = drafts.filter((event) => !rejectedIds.has(event.event_id));
+    await replaceDraftEvents(remaining);
+    setDraftVersion((value) => value + 1);
+    setStatusMessage(`Quarantined ${rejectedIds.size} rejected draft ${rejectedIds.size === 1 ? "event" : "events"}.`);
+    trackActivity(`Quarantined ${rejectedIds.size} rejected draft events after sync review.`, "warning");
   }
 
   function togglePin(module: Module) {
@@ -606,6 +834,7 @@ export function FieldOpsApp() {
     { id: "risk", label: "Run Risk Score", hint: "Operations", run: handleRiskScore },
     { id: "refresh", label: "Refresh All Data", hint: "Sync", run: refreshAll },
     { id: "sync", label: "Sync Draft Queue", hint: "Offline", run: handleSyncDrafts },
+    { id: "repair", label: "Repair Sync Chain", hint: "Recovery", run: handleReconcileSyncChain },
     { id: "hazard", label: "Report Hazard", hint: "Safety", run: () => handleReportHazard() },
     { id: "emergency", label: "Emergency Alert", hint: "Critical", run: () => handleReportHazard(5) },
     { id: "training", label: "Generate Training", hint: "Learning", run: handleTraining },
@@ -620,40 +849,60 @@ export function FieldOpsApp() {
     : [];
 
   const pinned = modules.filter((module) => pinnedModules.includes(module.id));
+  const checklistItems = [
+    { id: "pinch", label: "Pinch zones clear", checked: checklist.pinch, required: true },
+    { id: "tension", label: "Line tension confirmed", checked: checklist.tension, required: true },
+    { id: "comms", label: "Comms verified", checked: checklist.comms, required: true },
+    { id: "ppe", label: "PPE complete", checked: checklist.ppe, required: true },
+    { id: "deck", label: "Deck clear", checked: checklist.deck, required: true }
+  ];
+  const completeChecks = checklistItems.filter((item) => item.checked).length;
+  const completionPercent = Math.round((completeChecks / checklistItems.length) * 100);
+  const riskTone = risk?.tier === "CRITICAL" || risk?.tier === "HIGH" ? "danger" : risk?.tier === "MODERATE" ? "warning" : "good";
+  const activeMeta = moduleMeta[activeModule];
 
   function renderSafetyModule() {
     return (
-      <>
-        <article className="module-card">
-          <div className="card-head">
-            <h2>Mission safety gate</h2>
-            <button className="ghost" onClick={() => togglePin("safety")}>
-              {pinnedModules.includes("safety") ? "Pinned" : "Pin"}
-            </button>
-          </div>
-          <p className="meta">Trip {tripId}</p>
+      <Grid cols={2} gap="lg">
+        <Card className="mission-card" glow={mode === "OFFSHORE" && offshoreReady}>
+          <CardHeader>
+            <div>
+              <CardTitle>Mission safety gate</CardTitle>
+              <CardDescription>{mode === "OFFSHORE" ? "Haul authorization readiness" : "Solo operator check-in cadence"}</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => togglePin("safety")}>
+              <Icon name={pinnedModules.includes("safety") ? "PinOff" : "Pin"} size={16} />
+              {pinnedModules.includes("safety") ? "Unpin" : "Pin"}
+            </Button>
+          </CardHeader>
 
           {mode === "OFFSHORE" ? (
             <>
-              <div className="check-grid">
-                <label><input type="checkbox" checked={checklist.pinch} onChange={(e) => setChecklist((s) => ({ ...s, pinch: e.target.checked }))} />Pinch zones clear</label>
-                <label><input type="checkbox" checked={checklist.tension} onChange={(e) => setChecklist((s) => ({ ...s, tension: e.target.checked }))} />Line tension confirmed</label>
-                <label><input type="checkbox" checked={checklist.comms} onChange={(e) => setChecklist((s) => ({ ...s, comms: e.target.checked }))} />Comms verified</label>
-                <label><input type="checkbox" checked={checklist.ppe} onChange={(e) => setChecklist((s) => ({ ...s, ppe: e.target.checked }))} />PPE complete</label>
-                <label><input type="checkbox" checked={checklist.deck} onChange={(e) => setChecklist((s) => ({ ...s, deck: e.target.checked }))} />Deck clear</label>
+              <div className="readiness-ring" aria-label={`${completionPercent}% ready`}>
+                <div style={{ "--progress": `${completionPercent}%` } as React.CSSProperties}>
+                  <strong>{completionPercent}%</strong>
+                  <span>{completeChecks}/{checklistItems.length} checks</span>
+                </div>
               </div>
-              <button disabled={!offshoreReady} onClick={handleAuthorizeHaul}>
+              <Checklist
+                items={checklistItems}
+                onToggle={(id) => setChecklist((s) => ({ ...s, [id]: !s[id as keyof typeof s] }))}
+              />
+              <Button fullWidth disabled={!offshoreReady} onClick={handleAuthorizeHaul} rightIcon={<Icon name="ArrowRight" size={16} />}>
                 {offshoreReady ? "Authorize haul cycle" : "Complete all checks"}
-              </button>
+              </Button>
             </>
           ) : (
             <>
-              <p>Operator check-in cadence: 20 minutes.</p>
+              <div className="operator-status">
+                <MetricTile label="check-in window" value="20m" tone="warning" icon="Timer" />
+                <MetricTile label="heater reminders" value={heaterOn ? "On" : "Paused"} tone={heaterOn ? "good" : "neutral"} icon="Flame" />
+              </div>
               <div className="action-row">
-                <button onClick={handleScheduleCheckin}>Schedule check-in</button>
-                <button className="secondary" onClick={handleCompleteCheckin}>
+                <Button onClick={handleScheduleCheckin} leftIcon={<Icon name="CalendarClock" size={16} />}>Schedule check-in</Button>
+                <Button variant={checkinDone ? "success" : "secondary"} onClick={handleCompleteCheckin} leftIcon={<Icon name="CheckCircle2" size={16} />}>
                   {checkinDone ? "Check-in sent" : "I am safe"}
-                </button>
+                </Button>
               </div>
               <label className="toggle">
                 <input type="checkbox" checked={heaterOn} onChange={(e) => setHeaterOn(e.target.checked)} />
@@ -664,66 +913,119 @@ export function FieldOpsApp() {
               </p>
             </>
           )}
-        </article>
+        </Card>
 
-        <article className="module-card">
-          <h2>Emergency and queue</h2>
-          <p className="meta">Fast emergency broadcast and offline queue controls.</p>
-          <div className="action-row">
-            <button className="danger" onClick={() => handleReportHazard(5)}>Send emergency alert</button>
-            <button className="secondary" onClick={handleSyncDrafts}>Sync queue now</button>
+        <Card className="emergency-card" variant="solid">
+          <CardHeader>
+            <div>
+              <CardTitle>Emergency and queue</CardTitle>
+              <CardDescription>Critical broadcast and offline event control</CardDescription>
+            </div>
+            <Badge variant={isOnline ? "success" : "warning"} dot pulse={!isOnline}>{isOnline ? "Online" : "Offline"}</Badge>
+          </CardHeader>
+          <div className="action-stack">
+            <Button variant="danger" size="lg" fullWidth onClick={() => handleReportHazard(5)} leftIcon={<Icon name="Siren" size={20} />}>
+              Send emergency alert
+            </Button>
+            <Button variant="secondary" fullWidth onClick={handleSyncDrafts} disabled={!drafts.length} leftIcon={<Icon name="UploadCloud" size={16} />}>
+              Sync queue now
+            </Button>
           </div>
-          <ul>
-            <li><strong>Queue depth</strong> {drafts.length}</li>
-            <li><strong>Connection</strong> {isOnline ? "Online" : "Offline"}</li>
-          </ul>
-        </article>
-      </>
+          <div className="metric-row">
+            <MetricTile label="queued events" value={drafts.length} tone={drafts.length ? "warning" : "good"} icon="Inbox" />
+            <MetricTile label="sync state" value={effectiveSyncState} tone={effectiveSyncState === "ERROR" ? "danger" : effectiveSyncState === "PENDING" ? "warning" : "good"} icon="RefreshCw" />
+          </div>
+          <div className="device-signing-panel">
+            <div>
+              <strong>
+                {deviceRegistered
+                  ? "Trusted device registered"
+                  : deviceSigningReady
+                    ? "Trusted device key ready"
+                    : "Device key not installed"}
+              </strong>
+              <span>{deviceIdentity.deviceId ?? "No device id"}</span>
+            </div>
+            <div className="device-key-actions">
+              <Button variant="ghost" size="sm" onClick={handleGenerateDeviceIdentity} leftIcon={<Icon name="KeyRound" size={16} />}>
+                {deviceSigningReady ? "Rotate" : "Generate"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleRegisterDeviceIdentity} disabled={!deviceSigningReady || deviceRegistered}>
+                Register
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleClearDeviceIdentity} disabled={!deviceSigningReady}>
+                Clear
+              </Button>
+            </div>
+            {deviceIdentity.publicKey && (
+              <code title={deviceIdentity.publicKey}>{deviceIdentity.publicKey.slice(0, 22)}...</code>
+            )}
+          </div>
+        </Card>
+      </Grid>
     );
   }
 
   function renderOperationsModule() {
     return (
-      <>
-        <article className="module-card">
-          <div className="card-head">
-            <h2>Risk copilot</h2>
-            <button className="ghost" onClick={() => togglePin("operations")}>
-              {pinnedModules.includes("operations") ? "Pinned" : "Pin"}
-            </button>
-          </div>
-          <p className="meta">On-demand risk scoring for current workload and weather.</p>
-          <button onClick={handleRiskScore}>Recompute risk</button>
+      <Grid cols={2} gap="lg">
+        <Card className="risk-panel" glow={Boolean(risk)}>
+          <CardHeader>
+            <div>
+              <CardTitle>Risk copilot</CardTitle>
+              <CardDescription>Current workload, weather, and safety signal blend</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => togglePin("operations")}>
+              <Icon name={pinnedModules.includes("operations") ? "PinOff" : "Pin"} size={16} />
+              {pinnedModules.includes("operations") ? "Unpin" : "Pin"}
+            </Button>
+          </CardHeader>
+          <Button onClick={handleRiskScore} leftIcon={<Icon name="Activity" size={16} />}>Recompute risk</Button>
           {risk ? (
-            <div className="result">
-              <p><strong>{risk.tier}</strong> score {risk.score}</p>
-              <ul>
+            <div className={`risk-result ${riskTone}`}>
+              <div>
+                <RiskBadge tier={risk.tier} score={risk.score} size="lg" />
+                <p>{risk.rationale[0] ?? "Risk profile generated."}</p>
+              </div>
+              <ul className="compact-list">
                 {risk.rationale.slice(0, 3).map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>
             </div>
           ) : (
-            <p className="meta">No live score yet.</p>
+            <p className="empty-state">No live score yet. Run a risk check before the next operating decision.</p>
           )}
-        </article>
+        </Card>
 
-        <article className="module-card">
-          <h2>{mode === "OFFSHORE" ? "Gear transition" : "Route confidence"}</h2>
+        <Card className="workflow-panel">
+          <CardHeader>
+            <div>
+              <CardTitle>{mode === "OFFSHORE" ? "Gear transition" : "Route confidence"}</CardTitle>
+              <CardDescription>{mode === "OFFSHORE" ? "Update gear state with a synced field event" : "Return window and solo travel checks"}</CardDescription>
+            </div>
+          </CardHeader>
           {mode === "OFFSHORE" ? (
             <>
-              <input value={tripId} onChange={(e) => setTripId(e.target.value)} placeholder="Trip id" />
-              <input value={gearId} onChange={(e) => setGearId(e.target.value)} placeholder="Gear id" />
-              <select value={transition} onChange={(e) => setTransition(e.target.value as Transition)}>
-                <option value="SET">SET</option>
-                <option value="CHECKED">CHECKED</option>
-                <option value="HAULED">HAULED</option>
-                <option value="MISSING">MISSING</option>
-                <option value="RECOVERED">RECOVERED</option>
-                <option value="REMOVED">REMOVED</option>
-              </select>
-              <button onClick={handleGearTransition}>Submit transition</button>
-              <ul>
+              <Stack gap="sm">
+                <Input label="Trip id" value={tripId} onChange={(e) => setTripId(e.target.value)} placeholder="Trip id" />
+                <Input label="Gear id" value={gearId} onChange={(e) => setGearId(e.target.value)} placeholder="Gear id" />
+                <Select
+                  label="Transition"
+                  value={transition}
+                  onChange={(e) => setTransition(e.target.value as Transition)}
+                  options={[
+                    { value: "SET", label: "Set" },
+                    { value: "CHECKED", label: "Checked" },
+                    { value: "HAULED", label: "Hauled" },
+                    { value: "MISSING", label: "Missing" },
+                    { value: "RECOVERED", label: "Recovered" },
+                    { value: "REMOVED", label: "Removed" }
+                  ]}
+                />
+                <Button onClick={handleGearTransition} rightIcon={<Icon name="Send" size={16} />}>Submit transition</Button>
+              </Stack>
+              <ul className="compact-list">
                 {gearRows.slice(0, 5).map((row) => (
                   <li key={row.gear_id}>{row.gear_id} <strong>{row.status}</strong></li>
                 ))}
@@ -731,65 +1033,78 @@ export function FieldOpsApp() {
               </ul>
             </>
           ) : (
-            <div className="result">
-              <p><strong>Return window:</strong> 17:40</p>
-              <p><strong>Daylight left:</strong> 1h 55m</p>
-              <p><strong>Draft events queued:</strong> {drafts.length}</p>
+            <div className="route-grid">
+              <MetricTile label="return window" value="17:40" tone="good" icon="Clock3" />
+              <MetricTile label="daylight left" value="1h 55m" tone="warning" icon="Sun" />
+              <MetricTile label="draft queue" value={drafts.length} tone={drafts.length ? "warning" : "good"} icon="Archive" />
             </div>
           )}
-        </article>
-      </>
+        </Card>
+      </Grid>
     );
   }
 
   function renderHazardsModule() {
     return (
-      <article className="module-card wide">
-        <div className="card-head">
-          <h2>Shared hazard layer</h2>
-          <button className="ghost" onClick={() => togglePin("hazards")}>
-            {pinnedModules.includes("hazards") ? "Pinned" : "Pin"}
-          </button>
-        </div>
-        <p className="meta">Report and sync hazards across connected crews.</p>
+      <Card className="wide-panel">
+        <CardHeader>
+          <div>
+            <CardTitle>Shared hazard layer</CardTitle>
+            <CardDescription>Report, refresh, and review hazards across connected crews</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => togglePin("hazards")}>
+            <Icon name={pinnedModules.includes("hazards") ? "PinOff" : "Pin"} size={16} />
+            {pinnedModules.includes("hazards") ? "Unpin" : "Pin"}
+          </Button>
+        </CardHeader>
         <div className="action-row">
-          <button onClick={refreshAll}>Refresh feed</button>
-          <button className="secondary" onClick={() => handleReportHazard()}>Report hazard</button>
+          <Button onClick={refreshAll} leftIcon={<Icon name="RefreshCw" size={16} />}>Refresh feed</Button>
+          <Button variant="secondary" onClick={() => handleReportHazard()} leftIcon={<Icon name="MapPinPlus" size={16} />}>Report hazard</Button>
         </div>
-        <ul>
+        <ul className="hazard-list">
           {hazards.map((hazard) => (
             <li key={hazard.hazard_id}>
-              <strong>{hazard.type}</strong> confidence {Math.round(hazard.confidence * 100)}%
+              <span>
+                <strong>{hazard.type}</strong>
+                <small>Confidence {Math.round(hazard.confidence * 100)}%</small>
+              </span>
+              <Badge variant={hazard.confidence >= 0.8 ? "danger" : "warning"}>{hazard.confidence >= 0.8 ? "High confidence" : "Needs review"}</Badge>
               <em>{hazard.sharing_scope}</em>
             </li>
           ))}
           {!hazards.length ? <li>No hazards synced yet.</li> : null}
         </ul>
-      </article>
+      </Card>
     );
   }
 
   function renderLearningModule() {
     return (
-      <article className="module-card wide">
-        <div className="card-head">
-          <h2>Training coach</h2>
-          <button className="ghost" onClick={() => togglePin("learning")}>
-            {pinnedModules.includes("learning") ? "Pinned" : "Pin"}
-          </button>
-        </div>
-        <p className="meta">Targeted assignments driven by check-ins, compliance, and near misses.</p>
-        <button onClick={handleTraining}>Generate assignments</button>
-        <ul>
+      <Card className="wide-panel">
+        <CardHeader>
+          <div>
+            <CardTitle>Training coach</CardTitle>
+            <CardDescription>Assignments driven by check-ins, compliance, and near misses</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => togglePin("learning")}>
+            <Icon name={pinnedModules.includes("learning") ? "PinOff" : "Pin"} size={16} />
+            {pinnedModules.includes("learning") ? "Unpin" : "Pin"}
+          </Button>
+        </CardHeader>
+        <Button onClick={handleTraining} leftIcon={<Icon name="Sparkles" size={16} />}>Generate assignments</Button>
+        <ul className="training-list">
           {training.slice(0, 5).map((item) => (
             <li key={item.module_id}>
-              <strong>{item.title}</strong>
+              <span>
+                <strong>{item.title}</strong>
+                <small>Recommended for current shift profile</small>
+              </span>
               <em>{item.module_id}</em>
             </li>
           ))}
           {!training.length ? <li>No recommendations yet.</li> : null}
         </ul>
-      </article>
+      </Card>
     );
   }
 
@@ -807,157 +1122,181 @@ export function FieldOpsApp() {
   };
 
   return (
-    <AppShell>
-      {/* Header with sync status */}
-      <PageHeader
-        title="Field Operations"
-        subtitle={headerSubtitle}
-        actions={
-          <SyncIndicator
-            state={syncStateMap[effectiveSyncState]}
-            pendingCount={drafts.length}
-            lastSync={drafts.length === 0 ? new Date() : undefined}
-          />
-        }
-      />
-
-      {/* Quick actions bar */}
-      <Section>
-        <div className="quick-row flex flex-row gap-2">
-          <Button variant="primary" size="sm" onClick={handleRiskScore} loading={syncState === "SYNCING"}>
-            <Icon name="Activity" size={16} />
-            Risk Now
-          </Button>
-          <Button variant="secondary" size="sm" onClick={refreshAll}>
-            <Icon name="RefreshCw" size={16} />
-            Refresh
-          </Button>
-          <Button variant="secondary" size="sm" onClick={handleSyncDrafts} disabled={drafts.length === 0}>
-            <Icon name="Upload" size={16} />
-            Sync ({drafts.length})
-          </Button>
-        </div>
-      </Section>
-
-      {/* Mode switch */}
-      <Section>
-        <Navigation
-          items={[
-            { id: "OFFSHORE", label: "Offshore", icon: <Icon name="Ship" size={20} /> },
-            { id: "ICE", label: "Ice", icon: <Icon name="Snowflake" size={20} /> },
-          ]}
-          activeId={mode}
-          onSelect={(id) => setMode(id as Mode)}
-          variant="pills"
-        />
-      </Section>
-
-      {/* Pinned modules */}
-      {pinned.length > 0 && (
-        <Section>
-          <div className="pinned-strip flex flex-row gap-2 items-center">
-            <Badge variant="default">Pinned</Badge>
-            {pinned.map((module) => (
-              <Button key={module.id} variant="ghost" size="sm" onClick={() => setActiveModule(module.id)}>
-                {module.label}
-              </Button>
-            ))}
+    <AppShell maxWidth="xl" className="field-shell">
+      <section className="mission-hero">
+        <div className="hero-copy">
+          <Badge variant={mode === "OFFSHORE" ? "cyan" : "teal"} dot>{mode === "OFFSHORE" ? "Offshore crew" : "Ice operator"}</Badge>
+          <h1>Field Operations</h1>
+          <p>{headerSubtitle}</p>
+          <div className="hero-actions">
+            <Button onClick={handleRiskScore} loading={syncState === "SYNCING"} leftIcon={<Icon name="Activity" size={16} />}>Risk now</Button>
+            <Button variant="secondary" onClick={refreshAll} leftIcon={<Icon name="RefreshCw" size={16} />}>Refresh</Button>
+            <Button variant="secondary" onClick={handleSyncDrafts} disabled={drafts.length === 0} leftIcon={<Icon name="Upload" size={16} />}>
+              Sync {drafts.length ? `(${drafts.length})` : ""}
+            </Button>
           </div>
-        </Section>
-      )}
+        </div>
 
-      {/* Utility cards */}
-      <Section>
+        <Card className="hero-panel" hover={false}>
+          <div className="hero-panel-top">
+            <SyncIndicator
+              state={syncStateMap[effectiveSyncState]}
+              pendingCount={drafts.length}
+              lastSync={drafts.length === 0 ? new Date() : undefined}
+            />
+            <Badge variant={isOnline ? "success" : "warning"} dot pulse={!isOnline}>{isOnline ? "Signal live" : "Offline"}</Badge>
+          </div>
+          <Input
+            label="Active trip"
+            value={tripId}
+            onChange={(e) => setTripId(e.target.value)}
+            placeholder="Trip id"
+            leftIcon={<Icon name="Route" size={16} />}
+          />
+          <Navigation
+            items={[
+              { id: "OFFSHORE", label: "Offshore", icon: <Icon name="Ship" size={20} /> },
+              { id: "ICE", label: "Ice", icon: <Icon name="Snowflake" size={20} /> },
+            ]}
+            activeId={mode}
+            onSelect={(id) => setMode(id as Mode)}
+            variant="pills"
+          />
+        </Card>
+      </section>
+
+      <Section className="command-section">
         <Grid cols={3} gap="md">
-          {/* Quick command */}
-          <Card variant="glass">
+          <Card variant="glass" className="command-card">
             <CardHeader>
               <CardTitle>Quick Command</CardTitle>
+              <Icon name="Command" size={20} />
             </CardHeader>
-            <CardContent>
-              <Input
-                value={commandQuery}
-                onChange={(e) => setCommandQuery(e.target.value)}
-                placeholder="Type command..."
-                leftIcon={<Icon name="Search" size={16} />}
-              />
-              {filteredCommands.length > 0 && (
-                <Stack gap="sm" className="mt-4">
-                  {filteredCommands.slice(0, 5).map((command) => (
-                    <Button key={command.id} variant="ghost" size="sm" onClick={() => command.run()}>
-                      {command.label}
-                      <Badge variant="default" size="sm">{command.hint}</Badge>
-                    </Button>
-                  ))}
-                </Stack>
-              )}
-            </CardContent>
+            <Input
+              value={commandQuery}
+              onChange={(e) => setCommandQuery(e.target.value)}
+              placeholder="Search actions..."
+              leftIcon={<Icon name="Search" size={16} />}
+            />
+            <div className="command-results">
+              {(filteredCommands.length ? filteredCommands.slice(0, 5) : quickCommands.slice(0, 3)).map((command) => (
+                <button key={command.id} className="command-option" onClick={() => command.run()}>
+                  <span>{command.label}</span>
+                  <Badge variant={command.hint === "Critical" ? "danger" : "default"} size="sm">{command.hint}</Badge>
+                </button>
+              ))}
+            </div>
           </Card>
 
-          {/* Offline queue */}
-          <Card variant="glass">
+          <Card variant="glass" className="queue-card">
             <CardHeader>
               <CardTitle>Offline Queue</CardTitle>
               <Badge variant={drafts.length > 0 ? "warning" : "success"}>{drafts.length} events</Badge>
             </CardHeader>
-            <CardContent>
-              <Stack gap="sm">
-                <div className="flex flex-row gap-2">
-                  <Button variant="secondary" size="sm" onClick={handleExportDrafts} disabled={drafts.length === 0}>
-                    Export
+            <div className="queue-actions">
+              <Button variant="secondary" size="sm" onClick={handleExportDrafts} disabled={drafts.length === 0} leftIcon={<Icon name="Download" size={16} />}>Export</Button>
+              <Button variant="ghost" size="sm" onClick={handleClearQueue} disabled={drafts.length === 0} leftIcon={<Icon name="Trash2" size={16} />}>Clear</Button>
+            </div>
+            <div className="queue-list">
+              {drafts.slice(0, 4).map((event) => (
+                <div key={event.event_id} className="queue-item">
+                  <span>
+                    <StatusBadge status={event.event_type.includes("SAFETY") ? "active" : "synced"} size="sm">
+                      {formatEventLabel(event.event_type)}
+                    </StatusBadge>
+                    <small>{formatTime(event.ts_device)}</small>
+                  </span>
+                  <IconButton icon="X" label="Remove" size="sm" onClick={() => handleRemoveDraft(event.event_id)} />
+                </div>
+              ))}
+              {drafts.length === 0 && <p className="empty-state">No queued events.</p>}
+            </div>
+            {syncRepairReport && (
+              <div className={`sync-repair-panel ${syncRepairReport.deviceChainIssue ? "danger" : "review"}`}>
+                <div className="sync-repair-summary">
+                  <span>
+                    <strong>Last sync review</strong>
+                    <small>{formatTime(syncRepairReport.checkedAt)}</small>
+                  </span>
+                  <Badge variant={syncRepairReport.rejected.length ? "warning" : "success"} size="sm">
+                    {syncRepairReport.accepted}/{syncRepairReport.attempted} accepted
+                  </Badge>
+                </div>
+                {syncRepairReport.rejected.length > 0 && (
+                  <ul>
+                    {syncRepairReport.rejected.slice(0, 3).map((item, index) => (
+                      <li key={`${item.event_id ?? "unknown"}-${index}`}>
+                        <span>{item.event_id ? item.event_id.slice(0, 8) : "unknown"}</span>
+                        <em>{item.reason}</em>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="queue-actions">
+                  <Button variant="secondary" size="sm" onClick={handleReconcileSyncChain} leftIcon={<Icon name="RefreshCw" size={16} />}>
+                    Reconcile
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={handleClearQueue} disabled={drafts.length === 0}>
-                    Clear
+                  <Button variant="ghost" size="sm" onClick={handleQuarantineRejectedDrafts} disabled={!syncRepairReport.rejected.length}>
+                    Quarantine rejected
                   </Button>
                 </div>
-                {drafts.slice(0, 4).map((event) => (
-                  <div key={event.event_id} className="flex items-center justify-between p-2 rounded bg-[var(--bg-secondary)]">
-                    <span className="text-sm">
-                      <StatusBadge status={event.event_type.includes("SAFETY") ? "active" : "synced"}>
-                        {formatEventLabel(event.event_type)}
-                      </StatusBadge>
-                      <span className="ml-2 text-[var(--ink-muted)]">{formatTime(event.ts_device)}</span>
-                    </span>
-                    <IconButton icon="X" label="Remove" size="sm" onClick={() => handleRemoveDraft(event.event_id)} />
-                  </div>
-                ))}
-                {drafts.length === 0 && <p className="text-sm text-[var(--ink-muted)]">No queued events.</p>}
-              </Stack>
-            </CardContent>
+              </div>
+            )}
           </Card>
 
-          {/* Shift notes */}
-          <Card variant="glass">
+          <Card variant="glass" className="notes-card">
             <CardHeader>
               <CardTitle>Shift Notes</CardTitle>
+              <Badge variant="default">{shiftNotes.length}</Badge>
             </CardHeader>
-            <CardContent>
-              <Textarea
-                value={noteInput}
-                onChange={(e) => setNoteInput(e.target.value)}
-                placeholder="Write handoff notes..."
-                rows={2}
-              />
-              <div className="flex flex-row gap-2 mt-3">
-                <Button size="sm" onClick={saveShiftNote} disabled={!noteInput.trim()}>Save</Button>
-                <Button variant="ghost" size="sm" onClick={copyHandoffSummary}>Copy Summary</Button>
-              </div>
-            </CardContent>
+            <Textarea
+              value={noteInput}
+              onChange={(e) => setNoteInput(e.target.value)}
+              placeholder="Write handoff notes..."
+              rows={2}
+            />
+            <div className="queue-actions">
+              <Button size="sm" onClick={saveShiftNote} disabled={!noteInput.trim()} leftIcon={<Icon name="Save" size={16} />}>Save</Button>
+              <Button variant="ghost" size="sm" onClick={copyHandoffSummary} leftIcon={<Icon name="Copy" size={16} />}>Copy</Button>
+            </div>
           </Card>
         </Grid>
       </Section>
 
-      {/* Status message */}
+      <Section className="module-picker">
+        <div className="module-grid">
+          {modules.map((module) => {
+            const meta = moduleMeta[module.id];
+            return (
+              <button
+                key={module.id}
+                className={`module-switch ${activeModule === module.id ? "active" : ""}`}
+                onClick={() => setActiveModule(module.id)}
+              >
+                <Icon name={meta.icon} size={24} />
+                <span>
+                  <strong>{meta.label}</strong>
+                  <small>{meta.description}</small>
+                </span>
+                {pinnedModules.includes(module.id) && <Badge variant="teal" size="sm">Pinned</Badge>}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
       {statusMessage && (
-        <Section>
-          <Card variant="outline" padding="sm">
-            <p className="text-sm text-[var(--ink-secondary)]">{statusMessage}</p>
-          </Card>
-        </Section>
+        <Card variant="outline" padding="sm" className="status-callout">
+          <Icon name="Info" size={20} />
+          <p>{statusMessage}</p>
+        </Card>
       )}
 
-      {/* Main content */}
-      <Section>
+      <Section
+        title={activeMeta.label}
+        description={activeMeta.description}
+        className="active-module"
+      >
         <Stack gap="lg">
           {activeModule === "safety" && renderSafetyModule()}
           {activeModule === "operations" && renderOperationsModule()}
@@ -966,19 +1305,40 @@ export function FieldOpsApp() {
         </Stack>
       </Section>
 
-      {/* Recent activity */}
-      <Section title="Recent Activity">
-        <ActivityList
-          items={recentActivity.slice(0, 10).map((item) => ({
-            id: item.id,
-            title: item.text,
-            timestamp: new Date(item.createdAt),
-            type: item.tone === "danger" ? "danger" : item.tone === "warning" ? "warning" : item.tone === "success" ? "success" : "info",
-          }))}
-        />
+      <Section title="Recent Activity" className="activity-section">
+        <Grid cols={2} gap="lg">
+          <Card variant="glass">
+            <ActivityList
+              items={recentActivity.slice(0, 8).map((item) => ({
+                id: item.id,
+                title: item.text,
+                timestamp: new Date(item.createdAt),
+                type: item.tone === "danger" ? "danger" : item.tone === "warning" ? "warning" : item.tone === "success" ? "success" : "info",
+              }))}
+            />
+            {recentActivity.length === 0 && <p className="empty-state">Activity appears here as the shift progresses.</p>}
+          </Card>
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle>Latest Handoff Notes</CardTitle>
+              <Icon name="ClipboardList" size={20} />
+            </CardHeader>
+            <div className="note-list">
+              {todayNotes.map((note) => (
+                <div key={note.id} className="note-item">
+                  <span>
+                    <strong>{note.text}</strong>
+                    <small>{formatTime(note.createdAt)}</small>
+                  </span>
+                  <IconButton icon="Trash2" label="Delete note" size="sm" onClick={() => deleteShiftNote(note.id)} />
+                </div>
+              ))}
+              {todayNotes.length === 0 && <p className="empty-state">No handoff notes saved.</p>}
+            </div>
+          </Card>
+        </Grid>
       </Section>
 
-      {/* Bottom navigation for mobile */}
       <BottomNavigation
         items={navItems}
         activeId={activeModule}

@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { eventTypes } from "./types";
 
+function jsonByteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+function fitsJsonByteLimit(maxBytes: number) {
+  return (value: unknown) => jsonByteLength(value) <= maxBytes;
+}
+
 export const pointSchema = z.object({
   lat: z.number().gte(-90).lte(90),
   lon: z.number().gte(-180).lte(180)
@@ -12,7 +20,7 @@ export const tripPlannedSchema = z.object({
   owner_id: z.string(),
   location_name: z.string().optional(),
   return_by: z.string().datetime().optional(),
-  crew_ids: z.array(z.string()).default([])
+  crew_ids: z.array(z.string()).max(100).default([])
 });
 
 export const gearRegisteredSchema = z.object({
@@ -20,7 +28,10 @@ export const gearRegisteredSchema = z.object({
   gear_id: z.string(),
   mode: z.enum(["OFFSHORE", "ICE"]),
   label: z.string(),
-  metadata: z.record(z.any()).default({})
+  metadata: z.record(z.any()).default({}).refine(
+    fitsJsonByteLimit(16 * 1024),
+    "metadata must be 16384 bytes or less"
+  )
 });
 
 export const gearTransitionSchema = z.object({
@@ -52,7 +63,7 @@ export const complianceValidationSchema = z.object({
       message: z.string(),
       fix_hint: z.string().optional()
     })
-  )
+  ).max(250)
 });
 
 export const hazardReportedSchema = z.object({
@@ -78,7 +89,10 @@ export const lotCreatedSchema = z.object({
   trip_id: z.string(),
   mode: z.enum(["OFFSHORE", "ICE"]),
   species_totals: z.record(z.number()).default({}),
-  quality_json: z.record(z.unknown()).optional()
+  quality_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(16 * 1024),
+    "quality_json must be 16384 bytes or less"
+  ).optional()
 });
 
 export const lotScanAttachedSchema = z.object({
@@ -101,7 +115,7 @@ export const lotScanMismatchSchema = z.object({
 export const gearSweepSchema = z.object({
   trip_id: z.string(),
   mode: z.enum(["OFFSHORE", "ICE"]),
-  outstanding_gear_ids: z.array(z.string()).default([])
+  outstanding_gear_ids: z.array(z.string()).max(500).default([])
 });
 
 export const checkinSchema = z.object({

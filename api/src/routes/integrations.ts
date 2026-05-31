@@ -1,21 +1,83 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { fitsJsonByteLimit } from "../lib/json-size";
+import { validateOptionalQueryParam, validateRouteParam } from "../lib/route-params";
 
 const integrationUpsertSchema = z.object({
   integration_id: z.string().min(3),
   integration_type: z.string().min(2),
   provider: z.string().min(2),
   enabled: z.boolean().default(true),
-  config_json: z.record(z.unknown())
+  config_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(32 * 1024),
+    "config_json must be 32768 bytes or less"
+  )
 });
 
-export const integrationsRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string } } }>();
+export const integrationsRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
-integrationsRouter.get("/configs", async (c) => {
+const sensitiveConfigKeyPattern = /(secret|token|password|authorization|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|webhook[_-]?secret)/i;
+const redactedValue = "[REDACTED]";
+
+export function redactIntegrationConfig(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactIntegrationConfig(item));
+  }
+
+  if (!value || typeof value !== "object") return value;
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      sensitiveConfigKeyPattern.test(key) ? redactedValue : redactIntegrationConfig(item)
+    ])
+  );
+}
+
+function redactIntegrationRow<T extends { config_json?: unknown }>(row: T): T {
+  return {
+    ...row,
+    config_json: redactIntegrationConfig(row.config_json)
+  };
+}
+
+integrationsRouter.get("/status", async (c) => {
   const auth = c.get("auth");
-  const type = c.req.query("type");
+  const typeResult = validateOptionalQueryParam("type", c.req.query("type"));
+  if (!typeResult.ok) return c.json(typeResult.error, 400);
+  const type = typeResult.value;
+
+  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+    return type
+      ? sql`
+          select integration_id, integration_type, provider, enabled, updated_at::text
+          from integration_config
+          where tenant_id = ${auth.tenantId}
+            and integration_type = ${type}
+          order by updated_at desc
+          limit 300
+        `
+      : sql`
+          select integration_id, integration_type, provider, enabled, updated_at::text
+          from integration_config
+          where tenant_id = ${auth.tenantId}
+          order by updated_at desc
+          limit 300
+        `;
+  });
+
+  return c.json({ integrations: rows });
+});
+
+integrationsRouter.get("/configs", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
+  const auth = c.get("auth");
+  const typeResult = validateOptionalQueryParam("type", c.req.query("type"));
+  if (!typeResult.ok) return c.json(typeResult.error, 400);
+  const type = typeResult.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return type
@@ -36,10 +98,10 @@ integrationsRouter.get("/configs", async (c) => {
         `;
   });
 
-  return c.json({ configs: rows.map((row) => ({ ...row })) });
+  return c.json({ configs: rows.map((row) => redactIntegrationRow({ ...row })) });
 });
 
-integrationsRouter.post("/configs/upsert", async (c) => {
+integrationsRouter.post("/configs/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = integrationUpsertSchema.safeParse(body);
@@ -65,12 +127,30 @@ integrationsRouter.post("/configs/upsert", async (c) => {
     `;
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "integration_config.upsert",
+    subjectType: "INTEGRATION",
+    subjectId: parsed.data.integration_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      integration_type: parsed.data.integration_type,
+      provider: parsed.data.provider,
+      enabled: parsed.data.enabled
+    }
+  });
+
   return c.json({ ok: true, integration_id: parsed.data.integration_id });
 });
 
-integrationsRouter.post("/configs/:integrationId/test", async (c) => {
+integrationsRouter.post("/configs/:integrationId/test", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
-  const integrationId = c.req.param("integrationId");
+  const parsedIntegrationId = validateRouteParam("integrationId", c.req.param("integrationId"));
+  if (!parsedIntegrationId.ok) {
+    return c.json(parsedIntegrationId.error, 400);
+  }
+  const integrationId = parsedIntegrationId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -92,6 +172,20 @@ integrationsRouter.post("/configs/:integrationId/test", async (c) => {
     provider: string;
     enabled: boolean;
   };
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "integration_config.test",
+    subjectType: "INTEGRATION",
+    subjectId: row.integration_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      integration_type: row.integration_type,
+      provider: row.provider,
+      enabled: row.enabled
+    }
+  });
 
   return c.json({
     ok: true,

@@ -15,6 +15,36 @@ export interface DeviceKey {
   revoked: boolean;
 }
 
+const serverSignaturePrefix = "server:v1:";
+
+async function hmacSha256Base64Url(secret: string, message: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return bytesToBase64(new Uint8Array(signature));
+}
+
+export async function signServerEventHash(env: Env, eventHash: string): Promise<string> {
+  const secret = env.SIGNING_SECRET?.trim();
+  if (!secret) {
+    if (env.APP_ENV === "development") return "server:dev";
+    throw new Error("SIGNING_SECRET is required for server-generated events outside development");
+  }
+
+  return `${serverSignaturePrefix}${await hmacSha256Base64Url(secret, eventHash)}`;
+}
+
+export async function verifyServerEventSignature(env: Env, eventHash: string, signature: string): Promise<boolean> {
+  const secret = env.SIGNING_SECRET?.trim();
+  if (!secret || !signature.startsWith(serverSignaturePrefix)) return false;
+  return signature === await signServerEventHash(env, eventHash);
+}
+
 /**
  * Fetch a device's public key from the registry
  */
@@ -99,13 +129,16 @@ export async function verifyEventSignature(
     event_hash: string;
   }
 ): Promise<{ valid: boolean; reason?: string }> {
-  // Special case: server-generated events
-  if (event.signature === "server-generated") {
-    return { valid: true };
+  if (event.signature === "server-generated" || event.signature.startsWith("server:")) {
+    return { valid: false, reason: "server_signature_not_allowed_for_upload" };
   }
 
-  // Fetch device key
-  const deviceKey = await getDeviceKey(env, tenantId, event.device_id);
+  let deviceKey: DeviceKey | null;
+  try {
+    deviceKey = await getDeviceKey(env, tenantId, event.device_id);
+  } catch {
+    return { valid: false, reason: "device_key_lookup_failed" };
+  }
 
   if (!deviceKey) {
     return { valid: false, reason: "device_not_registered" };
@@ -154,10 +187,9 @@ export async function batchVerifySignatures(
 
   // Verify each device's events
   for (const [deviceId, deviceEvents] of byDevice) {
-    // Skip server-generated events
-    if (deviceEvents[0]?.signature === "server-generated") {
+    if (deviceEvents[0]?.signature === "server-generated" || deviceEvents[0]?.signature.startsWith("server:")) {
       for (const event of deviceEvents) {
-        results.set(event.event_id, { valid: true });
+        results.set(event.event_id, { valid: false, reason: "server_signature_not_allowed_for_upload" });
       }
       continue;
     }
@@ -252,11 +284,11 @@ export async function generateDeviceKeyPair(): Promise<{
   );
 
   const publicKeyRaw = await crypto.subtle.exportKey("raw", keyPair.publicKey);
-  const privateKeyRaw = await crypto.subtle.exportKey("raw", keyPair.privateKey);
+  const privateKeyPkcs8 = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
 
   return {
     publicKey: bytesToBase64(new Uint8Array(publicKeyRaw)),
-    privateKey: bytesToBase64(new Uint8Array(privateKeyRaw))
+    privateKey: bytesToBase64(new Uint8Array(privateKeyPkcs8))
   };
 }
 
@@ -270,7 +302,7 @@ export async function signWithPrivateKey(
   const privateKeyData = base64ToBytes(privateKeyBase64);
 
   const privateKey = await crypto.subtle.importKey(
-    "raw",
+    "pkcs8",
     privateKeyData.buffer as ArrayBuffer,
     { name: "Ed25519" },
     false,

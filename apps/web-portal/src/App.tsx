@@ -7,14 +7,19 @@ import {
   getTripState,
   getTripTimeline,
   listDevices,
+  listAuditEvents,
   listIntegrations,
   listLots,
   listRulesets,
   listTrips,
+  registerDevice,
+  revokeDevice,
   getSyncMetrics,
   scoreRisk,
   signCompliance,
-  verifyCertificate
+  upsertRuleset,
+  verifyCertificate,
+  type AuditEventsResponse
 } from "./lib/api";
 import { queuePendingAction, readPendingActions } from "./lib/offline";
 import type { KpiCard } from "./types";
@@ -107,6 +112,17 @@ interface OpenIncident {
   summary: string;
 }
 
+interface AuditEventRow {
+  audit_id: string;
+  actor_id: string;
+  actor_role: string;
+  action: string;
+  subject_type: string;
+  subject_id: string;
+  outcome: string;
+  created_at: string;
+}
+
 interface TripRow {
   trip_id: string;
   status: string;
@@ -127,6 +143,19 @@ interface ActivityLogItem {
   message: string;
   tone: "info" | "success" | "warning" | "danger";
   createdAt: string;
+}
+
+type RoleView = "CAPTAIN" | "COMPLIANCE" | "ADMIN" | "OWNER";
+type CloseoutStepStatus = "READY" | "BLOCKED" | "DONE";
+type DeviceSubjectType = "VESSEL" | "USER" | "GROUP" | "ORG";
+
+interface DeviceRow {
+  device_id: string;
+  subject_type: DeviceSubjectType;
+  subject_id?: string;
+  revoked: boolean;
+  key_version?: number;
+  last_seen_at?: string;
 }
 
 function formatConnectionName(type: string) {
@@ -176,6 +205,12 @@ function formatRulesetLabel(id: string) {
   return id.replace(/[_-]/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function closeoutStatusLabel(status: CloseoutStepStatus) {
+  if (status === "DONE") return "Done";
+  if (status === "READY") return "Ready";
+  return "Blocked";
+}
+
 const defaultDashboard: DashboardData = {
   active_trips: 0,
   missing_gear: 0,
@@ -196,6 +231,7 @@ function readJsonStorage<T>(key: string, fallback: T): T {
 }
 
 export function App() {
+  const [roleView, setRoleView] = useState<RoleView>("OWNER");
   const [tripId, setTripId] = useState("");
   const [certificateId, setCertificateId] = useState("");
   const [dashboard, setDashboard] = useState<DashboardData>(defaultDashboard);
@@ -213,9 +249,11 @@ export function App() {
   const [lotActionResult, setLotActionResult] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(() => readPendingActions().length);
   const [integrations, setIntegrations] = useState<Array<{ integration_id: string; integration_type: string; enabled: boolean }>>([]);
-  const [devices, setDevices] = useState<Array<{ device_id: string; subject_type: string; revoked: boolean }>>([]);
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [syncMetrics, setSyncMetrics] = useState<Array<{ metric_name: string; avg_value: number; samples: number }> | null>(null);
   const [rulesets, setRulesets] = useState<Array<{ ruleset_id: string; mode: string; region_code: string; priority: number }>>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEventRow[]>([]);
+  const [auditError, setAuditError] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState("Ops preset");
   const [workspacePresets, setWorkspacePresets] = useState<WorkspacePreset[]>(() =>
     readJsonStorage<WorkspacePreset[]>(WORKSPACE_PRESETS_KEY, [])
@@ -226,6 +264,21 @@ export function App() {
   const [commandQuery, setCommandQuery] = useState("");
   const [selectedTripIds, setSelectedTripIds] = useState<string[]>([]);
   const [batchResult, setBatchResult] = useState<string | null>(null);
+  const [deviceAdmin, setDeviceAdmin] = useState({
+    deviceId: "",
+    subjectType: "VESSEL" as DeviceSubjectType,
+    subjectId: "",
+    publicKey: ""
+  });
+  const [adminResult, setAdminResult] = useState<string | null>(null);
+  const [rulesetDraft, setRulesetDraft] = useState({
+    rulesetId: "ruleset_offshore_ops",
+    mode: "OFFSHORE" as "OFFSHORE" | "ICE",
+    regionCode: "AK",
+    priority: 100
+  });
+  const [rulesetActionResult, setRulesetActionResult] = useState<string | null>(null);
+  const [closeoutResult, setCloseoutResult] = useState<string | null>(null);
 
   // Live data hooks for visualizations
   const { vessels: liveVessels, loading: vesselsLoading, error: vesselsError, refetch: refetchVessels } = useFleetData(tripId || undefined, 30000);
@@ -464,9 +517,12 @@ export function App() {
 
   async function handleLoadIntegrations() {
     try {
-      const response = await listIntegrations() as { configs: Array<{ integration_id: string; integration_type: string; enabled: boolean }> };
-      setIntegrations(response.configs ?? []);
-      addActivity("Loaded integration configs.", "success");
+      const response = await listIntegrations() as {
+        integrations?: Array<{ integration_id: string; integration_type: string; enabled: boolean }>;
+        configs?: Array<{ integration_id: string; integration_type: string; enabled: boolean }>;
+      };
+      setIntegrations(response.integrations ?? response.configs ?? []);
+      addActivity("Loaded integration status.", "success");
     } catch {
       setIntegrations([]);
       addActivity("Integration load failed.", "warning");
@@ -475,7 +531,7 @@ export function App() {
 
   async function handleLoadDevices() {
     try {
-      const response = await listDevices() as { devices: Array<{ device_id: string; subject_type: string; revoked: boolean }> };
+      const response = await listDevices() as { devices: DeviceRow[] };
       setDevices(response.devices ?? []);
       addActivity("Loaded registered devices.", "success");
     } catch {
@@ -503,6 +559,28 @@ export function App() {
     } catch {
       setRulesets([]);
       addActivity("Ruleset load failed.", "warning");
+    }
+  }
+
+  async function handleLoadAuditEvents() {
+    try {
+      const response = await listAuditEvents(25) as AuditEventsResponse;
+      setAuditEvents((response.events ?? []).map((event) => ({
+        audit_id: event.audit_id,
+        actor_id: event.actor_id,
+        actor_role: event.actor_role,
+        action: event.action,
+        subject_type: event.subject_type,
+        subject_id: event.subject_id,
+        outcome: event.outcome,
+        created_at: event.created_at
+      })));
+      setAuditError(null);
+      addActivity("Loaded audit events.", "success");
+    } catch {
+      setAuditEvents([]);
+      setAuditError("Audit events require an admin or owner session.");
+      addActivity("Audit event load failed.", "warning");
     }
   }
 
@@ -575,6 +653,91 @@ export function App() {
 
     setBatchResult(`Export generated for ${successCount}/${selectedTripIds.length} selected trips.`);
     addActivity(`Batch export run completed (${successCount}/${selectedTripIds.length}).`, successCount ? "success" : "danger");
+  }
+
+  async function handleRegisterAdminDevice() {
+    if (!deviceAdmin.deviceId.trim() || !deviceAdmin.subjectId.trim() || !deviceAdmin.publicKey.trim()) {
+      setAdminResult("Device id, subject id, and public key are required.");
+      return;
+    }
+
+    try {
+      await registerDevice({
+        device_id: deviceAdmin.deviceId.trim(),
+        subject_type: deviceAdmin.subjectType,
+        subject_id: deviceAdmin.subjectId.trim(),
+        public_key: deviceAdmin.publicKey.trim(),
+        key_version: 1
+      });
+      setAdminResult(`Registered trusted ${formatDeviceLabel(deviceAdmin.subjectType).toLowerCase()}.`);
+      addActivity(`Registered trusted device ${deviceAdmin.deviceId}.`, "success");
+      await handleLoadDevices();
+    } catch {
+      setAdminResult("Device registration failed. Check role, key format, and network state.");
+      addActivity(`Device registration failed for ${deviceAdmin.deviceId || "new device"}.`, "danger");
+    }
+  }
+
+  async function handleRevokeAdminDevice(deviceId = deviceAdmin.deviceId) {
+    if (!deviceId.trim()) {
+      setAdminResult("Select or enter a device id to revoke.");
+      return;
+    }
+
+    try {
+      await revokeDevice(deviceId.trim());
+      setAdminResult(`Revoked ${deviceId.trim()}.`);
+      addActivity(`Revoked trusted device ${deviceId.trim()}.`, "warning");
+      await handleLoadDevices();
+    } catch {
+      setAdminResult("Device revocation failed. Check permissions and try again.");
+      addActivity(`Device revocation failed for ${deviceId.trim()}.`, "danger");
+    }
+  }
+
+  async function handlePublishRulesetDraft() {
+    if (!rulesetDraft.rulesetId.trim() || !rulesetDraft.regionCode.trim()) {
+      setRulesetActionResult("Ruleset id and region are required.");
+      return;
+    }
+
+    try {
+      await upsertRuleset({
+        ruleset_id: rulesetDraft.rulesetId.trim(),
+        mode: rulesetDraft.mode,
+        region_code: rulesetDraft.regionCode.trim().toUpperCase(),
+        effective_from: new Date().toISOString(),
+        priority: rulesetDraft.priority,
+        rules_json: {
+          source: "portal_policy_console",
+          controls: {
+            require_checkins: true,
+            require_trace_lot_before_export: true,
+            require_device_signature: true
+          }
+        }
+      });
+      setRulesetActionResult(`Published ${formatRulesetLabel(rulesetDraft.rulesetId)}.`);
+      addActivity(`Published ruleset ${rulesetDraft.rulesetId}.`, "success");
+      await handleLoadRulesets();
+    } catch {
+      setRulesetActionResult("Ruleset publish failed. Check admin role and policy values.");
+      addActivity(`Ruleset publish failed for ${rulesetDraft.rulesetId}.`, "danger");
+    }
+  }
+
+  async function handleGuidedCloseout() {
+    if (!tripId.trim()) {
+      setCloseoutResult("Select a trip before running closeout.");
+      return;
+    }
+
+    await handleTripLookup();
+    await handleCreateLot();
+    await handleSignCompliance();
+    await handleExportPackage();
+    setCloseoutResult("Closeout run completed. Review warnings, audit events, and generated export status.");
+    addActivity(`Guided closeout run completed for ${formatTripLabel(tripId)}.`, "success");
   }
 
   // Responsive chart dimensions
@@ -662,6 +825,69 @@ export function App() {
     return values.length ? values : null;
   }, [syncMetrics]);
 
+  const closeoutSteps = useMemo<Array<{ id: string; label: string; detail: string; status: CloseoutStepStatus }>>(() => {
+    const issueCount = tripState?.compliance?.issues?.length ?? 0;
+    const completion = tripState?.compliance?.completion_meter ?? 0;
+    return [
+      {
+        id: "trip",
+        label: "Trip state",
+        detail: tripState?.trip ? `${formatTripLabel(tripId)} loaded` : "Load trip state before signing.",
+        status: tripState?.trip ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
+      },
+      {
+        id: "lot",
+        label: "Trace lot",
+        detail: lotId.trim() ? `${formatLotLabel(lotId)} selected` : "Create or select a lot id.",
+        status: lotActionResult?.includes("Lot ready") ? "DONE" : lotId.trim() ? "READY" : "BLOCKED"
+      },
+      {
+        id: "issues",
+        label: "Compliance blockers",
+        detail: issueCount ? `${issueCount} issue ${issueCount === 1 ? "requires" : "require"} review` : "No loaded blockers.",
+        status: issueCount > 0 ? "BLOCKED" : completion >= 100 ? "DONE" : "READY"
+      },
+      {
+        id: "sign",
+        label: "Sign package",
+        detail: "Create an auditable sign-off package for the selected trip.",
+        status: lotActionResult?.includes("Compliance signed") ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
+      },
+      {
+        id: "export",
+        label: "Generate export",
+        detail: "Produce the regulator or processor package artifact.",
+        status: lotActionResult?.includes("Export generated") ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
+      }
+    ];
+  }, [tripState, tripId, lotId, lotActionResult]);
+
+  const roleWorkflows: Record<RoleView, Array<{ title: string; metric: string; action: string; tone: "info" | "success" | "warning" | "danger" }>> = useMemo(
+    () => ({
+      OWNER: [
+        { title: "Fleet health", metric: `${dashboard.active_trips} active trips`, action: "Review operating posture and export readiness.", tone: "info" },
+        { title: "Compliance exposure", metric: `${dashboard.compliance_issues_open} open issues`, action: "Prioritize closeout blockers before landings.", tone: dashboard.compliance_issues_open ? "warning" : "success" },
+        { title: "Risk posture", metric: `${openIncidents.length} open incidents loaded`, action: "Refresh risk and audit unresolved events.", tone: openIncidents.length ? "danger" : "success" }
+      ],
+      CAPTAIN: [
+        { title: "Trip command", metric: formatTripLabel(tripId), action: "Load trip, inspect gear health, and run risk refresh.", tone: tripId ? "info" : "warning" },
+        { title: "Deck safety", metric: riskResult ? `${riskResult.tier} ${Math.round(riskResult.score)}` : "No score", action: "Run risk scoring before haul or transit decisions.", tone: riskResult?.tier === "CRITICAL" || riskResult?.tier === "HIGH" ? "danger" : "info" },
+        { title: "Incident control", metric: `${openIncidents.length} incidents`, action: "Confirm incident ownership and mitigations.", tone: openIncidents.length ? "warning" : "success" }
+      ],
+      COMPLIANCE: [
+        { title: "Closeout readiness", metric: `${closeoutSteps.filter((step) => step.status === "DONE").length}/${closeoutSteps.length} steps`, action: "Run guided closeout and resolve blockers.", tone: closeoutSteps.some((step) => step.status === "BLOCKED") ? "warning" : "success" },
+        { title: "Trace package", metric: formatLotLabel(lotId), action: "Verify lot, certificate, and export lineage.", tone: lotId ? "info" : "warning" },
+        { title: "Audit evidence", metric: `${auditEvents.length} loaded events`, action: "Load audit events after sign/export actions.", tone: auditEvents.length ? "success" : "info" }
+      ],
+      ADMIN: [
+        { title: "Trusted devices", metric: `${devices.filter((device) => !device.revoked).length} active`, action: "Register, revoke, and review signing devices.", tone: devices.some((device) => device.revoked) ? "warning" : "info" },
+        { title: "Policy controls", metric: `${rulesets.length} rulesets loaded`, action: "Publish policy updates with audit trail.", tone: rulesets.length ? "success" : "info" },
+        { title: "Sync health", metric: syncMetrics ? `${syncMetrics.length} metrics` : "Not loaded", action: "Load metrics and investigate rejection spikes.", tone: syncMetrics ? "success" : "warning" }
+      ]
+    }),
+    [dashboard, openIncidents, tripId, riskResult, closeoutSteps, lotId, auditEvents, devices, rulesets, syncMetrics]
+  );
+
   // Refresh all visualizations
   const handleRefreshAll = useCallback(() => {
     refetchVessels();
@@ -683,6 +909,9 @@ export function App() {
     { id: "cmd-devices", label: "Load Devices", run: handleLoadDevices },
     { id: "cmd-sync", label: "Load Sync Metrics", run: handleLoadSyncMetrics },
     { id: "cmd-rules", label: "Load Rulesets", run: handleLoadRulesets },
+    { id: "cmd-audit", label: "Load Audit Events", run: handleLoadAuditEvents },
+    { id: "cmd-closeout", label: "Run Guided Closeout", run: handleGuidedCloseout },
+    { id: "cmd-rules-publish", label: "Publish Ruleset Draft", run: handlePublishRulesetDraft },
     { id: "cmd-save", label: "Save Workspace Preset", run: handleSaveWorkspace }
   ];
 
@@ -721,6 +950,50 @@ export function App() {
           </Card>
         </Section>
       )}
+
+      <Section title="Role Command Center" description="Operational views tuned for the people who act on the data.">
+        <Grid cols={4} gap="md">
+          {(["OWNER", "CAPTAIN", "COMPLIANCE", "ADMIN"] as RoleView[]).map((role) => (
+            <button
+              key={role}
+              className={`role-view-button ${roleView === role ? "active" : ""}`}
+              onClick={() => setRoleView(role)}
+            >
+              <span>{role === "OWNER" ? "Owner" : role === "CAPTAIN" ? "Captain" : role === "COMPLIANCE" ? "Compliance" : "Admin"}</span>
+              <small>
+                {role === "OWNER"
+                  ? "Portfolio posture"
+                  : role === "CAPTAIN"
+                    ? "Trip command"
+                    : role === "COMPLIANCE"
+                      ? "Closeout desk"
+                      : "Controls and devices"}
+              </small>
+            </button>
+          ))}
+        </Grid>
+        <Grid cols={3} gap="md" className="mt-4">
+          {roleWorkflows[roleView].map((workflow) => (
+            <Card key={workflow.title} variant="glass">
+              <CardContent>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm text-[var(--ink-muted)]">{workflow.title}</p>
+                    <p className="text-xl font-bold">{workflow.metric}</p>
+                  </div>
+                  <Badge
+                    variant={workflow.tone === "danger" ? "danger" : workflow.tone === "warning" ? "warning" : workflow.tone === "success" ? "success" : "info"}
+                    size="sm"
+                  >
+                    {workflow.tone}
+                  </Badge>
+                </div>
+                <p className="text-sm text-[var(--ink-secondary)] mt-3">{workflow.action}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </Grid>
+      </Section>
 
       {/* Command Center & Workspace */}
       <Section>
@@ -945,7 +1218,8 @@ export function App() {
           {/* Trace & Compliance */}
           <Card variant="glass">
             <CardHeader>
-              <CardTitle>Trace & Compliance</CardTitle>
+              <CardTitle>Guided Closeout</CardTitle>
+              <CardDescription>Trace lot, sign, and export in one controlled workflow</CardDescription>
             </CardHeader>
             <CardContent>
               <Input
@@ -957,8 +1231,26 @@ export function App() {
                 <Button size="sm" onClick={handleCreateLot}>Create Lot</Button>
                 <Button variant="secondary" size="sm" onClick={handleSignCompliance}>Sign</Button>
                 <Button variant="secondary" size="sm" onClick={handleExportPackage}>Export</Button>
+                <Button variant="success" size="sm" onClick={handleGuidedCloseout}>Run</Button>
               </div>
+              <Stack gap="sm" className="mt-4">
+                {closeoutSteps.map((step) => (
+                  <div key={step.id} className="workflow-step">
+                    <span>
+                      <strong>{step.label}</strong>
+                      <small>{step.detail}</small>
+                    </span>
+                    <StatusBadge
+                      status={step.status === "DONE" ? "synced" : step.status === "READY" ? "pending" : "error"}
+                      size="sm"
+                    >
+                      {closeoutStatusLabel(step.status)}
+                    </StatusBadge>
+                  </div>
+                ))}
+              </Stack>
               {lotActionResult && <p className="text-sm text-[var(--ink-muted)] mt-3">{lotActionResult}</p>}
+              {closeoutResult && <p className="text-sm text-[var(--success)] mt-2">{closeoutResult}</p>}
             </CardContent>
           </Card>
         </Grid>
@@ -966,7 +1258,7 @@ export function App() {
 
       {/* Data Connections & Devices */}
       <Section>
-        <Grid cols={2} gap="md">
+        <Grid cols={3} gap="md">
           <Card variant="glass">
             <CardHeader>
               <CardTitle>Data Connections & Devices</CardTitle>
@@ -1003,14 +1295,56 @@ export function App() {
                       <div key={dev.device_id} className="flex items-center justify-between p-2 rounded bg-[var(--bg-secondary)]">
                         <span className="text-sm">
                           <strong>{formatDeviceName(dev.subject_type, index)}</strong>
-                          <span className="text-[var(--ink-muted)] ml-2">{formatDeviceLabel(dev.subject_type)}</span>
+                          <span className="text-[var(--ink-muted)] ml-2">{dev.subject_id ?? formatDeviceLabel(dev.subject_type)}</span>
                         </span>
-                        <StatusBadge status={dev.revoked ? 'error' : 'synced'}>{dev.revoked ? 'Revoked' : 'Active'}</StatusBadge>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={dev.revoked ? 'error' : 'synced'}>{dev.revoked ? 'Revoked' : 'Active'}</StatusBadge>
+                          {!dev.revoked && (
+                            <IconButton icon="XCircle" label="Revoke device" size="sm" onClick={() => handleRevokeAdminDevice(dev.device_id)} />
+                          )}
+                        </div>
                       </div>
                     ))}
                   </Stack>
                 </div>
               )}
+
+              <div className="admin-form mt-4">
+                <p className="text-xs font-semibold text-[var(--ink-secondary)] mb-2">Register Trusted Device</p>
+                <Input
+                  value={deviceAdmin.deviceId}
+                  onChange={(event) => setDeviceAdmin((current) => ({ ...current, deviceId: event.target.value }))}
+                  placeholder="Device id"
+                />
+                <div className="admin-inline mt-2">
+                  <select
+                    value={deviceAdmin.subjectType}
+                    onChange={(event) => setDeviceAdmin((current) => ({ ...current, subjectType: event.target.value as DeviceSubjectType }))}
+                  >
+                    <option value="VESSEL">Vessel</option>
+                    <option value="USER">User</option>
+                    <option value="GROUP">Group</option>
+                    <option value="ORG">Org</option>
+                  </select>
+                  <Input
+                    value={deviceAdmin.subjectId}
+                    onChange={(event) => setDeviceAdmin((current) => ({ ...current, subjectId: event.target.value }))}
+                    placeholder="Subject id"
+                  />
+                </div>
+                <Textarea
+                  value={deviceAdmin.publicKey}
+                  onChange={(event) => setDeviceAdmin((current) => ({ ...current, publicKey: event.target.value }))}
+                  placeholder="Ed25519 public key"
+                  rows={2}
+                  className="mt-2"
+                />
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <Button size="sm" onClick={handleRegisterAdminDevice}>Register</Button>
+                  <Button variant="secondary" size="sm" onClick={() => handleRevokeAdminDevice()}>Revoke Entered</Button>
+                </div>
+                {adminResult && <p className="text-sm text-[var(--ink-muted)] mt-2">{adminResult}</p>}
+              </div>
 
               {syncMetrics && (
                 <div className="mt-4">
@@ -1037,7 +1371,40 @@ export function App() {
               <CardTitle>Ruleset Management</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button size="sm" onClick={handleLoadRulesets}>Load Rulesets</Button>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={handleLoadRulesets}>Load Rulesets</Button>
+                <Button variant="secondary" size="sm" onClick={handlePublishRulesetDraft}>Publish Draft</Button>
+              </div>
+
+              <div className="admin-form mt-4">
+                <Input
+                  value={rulesetDraft.rulesetId}
+                  onChange={(event) => setRulesetDraft((current) => ({ ...current, rulesetId: event.target.value }))}
+                  placeholder="Ruleset id"
+                />
+                <div className="admin-inline mt-2">
+                  <select
+                    value={rulesetDraft.mode}
+                    onChange={(event) => setRulesetDraft((current) => ({ ...current, mode: event.target.value as "OFFSHORE" | "ICE" }))}
+                  >
+                    <option value="OFFSHORE">Offshore</option>
+                    <option value="ICE">Ice</option>
+                  </select>
+                  <Input
+                    value={rulesetDraft.regionCode}
+                    onChange={(event) => setRulesetDraft((current) => ({ ...current, regionCode: event.target.value }))}
+                    placeholder="Region"
+                  />
+                </div>
+                <Input
+                  type="number"
+                  value={rulesetDraft.priority}
+                  onChange={(event) => setRulesetDraft((current) => ({ ...current, priority: Number(event.target.value) || 1 }))}
+                  placeholder="Priority"
+                  className="mt-2"
+                />
+                {rulesetActionResult && <p className="text-sm text-[var(--ink-muted)] mt-2">{rulesetActionResult}</p>}
+              </div>
 
               {rulesets.length > 0 && (
                 <Stack gap="sm" className="mt-4">
@@ -1051,6 +1418,40 @@ export function App() {
                     </div>
                   ))}
                 </Stack>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Audit Console */}
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle>Audit Console</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button size="sm" onClick={handleLoadAuditEvents}>Load Audit Events</Button>
+              {auditError && <p className="text-sm text-[var(--danger)] mt-3">{auditError}</p>}
+              {auditEvents.length > 0 && (
+                <Stack gap="sm" className="mt-4">
+                  {auditEvents.slice(0, 8).map((event) => (
+                    <div key={event.audit_id} className="p-2 rounded bg-[var(--bg-secondary)]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm">
+                          <strong>{event.action.replace(/_/g, " ")}</strong>
+                          <span className="text-[var(--ink-muted)] ml-2">{event.actor_role}</span>
+                        </span>
+                        <StatusBadge status={event.outcome === "SUCCESS" ? "synced" : "error"} size="sm">
+                          {event.outcome}
+                        </StatusBadge>
+                      </div>
+                      <p className="text-xs text-[var(--ink-muted)] mt-1">
+                        {event.actor_id} {"->"} {event.subject_type}:{event.subject_id}
+                      </p>
+                    </div>
+                  ))}
+                </Stack>
+              )}
+              {!auditError && auditEvents.length === 0 && (
+                <p className="text-sm text-[var(--ink-muted)] mt-4">No audit events loaded.</p>
               )}
             </CardContent>
           </Card>

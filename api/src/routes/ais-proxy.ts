@@ -1,15 +1,33 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { authMiddleware } from "../lib/auth";
+import { authenticateToken, authMiddleware, websocketTokenFromRequest } from "../lib/auth";
 import { withTenant } from "../lib/db";
 import type { AuthContext, Env } from "../types";
 
 type AisAppContext = { Bindings: Env; Variables: { auth: AuthContext } };
 
 const app = new Hono<AisAppContext>();
+const AIS_AI_MAX_BODY_BYTES = 64 * 1024;
+const AIS_AI_MAX_VESSELS = 25;
+const AIS_AI_MAX_OBSERVATIONS = 500;
+const AIS_AI_DEFAULT_TIMEOUT_MS = 12_000;
+
+function websocketToken(c: Context<AisAppContext>): string | null {
+  return websocketTokenFromRequest({
+    url: c.req.url,
+    authorization: c.req.header("Authorization"),
+    protocol: c.req.header("sec-websocket-protocol")
+  });
+}
 
 app.use("*", async (c, next) => {
   if (c.req.header("Upgrade") === "websocket") {
+    const token = websocketToken(c);
+    const auth = token ? await authenticateToken(c.env, token) : null;
+    if (!auth) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    c.set("auth", auth);
     return next();
   }
   return authMiddleware(c as any, next as any);
@@ -20,6 +38,46 @@ function requireAisProxyUrl(env: Env) {
     throw new Error("AIS_PROXY_URL is not configured");
   }
   return env.AIS_PROXY_URL.endsWith("/") ? env.AIS_PROXY_URL : `${env.AIS_PROXY_URL}/`;
+}
+
+function aisAiTimeoutMs(env: Env) {
+  const configured = Number(env.AIS_AI_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 1_000
+    ? Math.min(configured, 30_000)
+    : AIS_AI_DEFAULT_TIMEOUT_MS;
+}
+
+async function readBoundedJson(c: Context<AisAppContext>) {
+  const contentLength = Number(c.req.header("content-length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > AIS_AI_MAX_BODY_BYTES) {
+    return {
+      ok: false as const,
+      response: c.json({
+        error: "payload_too_large",
+        max_bytes: AIS_AI_MAX_BODY_BYTES
+      }, 413)
+    };
+  }
+
+  const text = await c.req.text();
+  if (new TextEncoder().encode(text).byteLength > AIS_AI_MAX_BODY_BYTES) {
+    return {
+      ok: false as const,
+      response: c.json({
+        error: "payload_too_large",
+        max_bytes: AIS_AI_MAX_BODY_BYTES
+      }, 413)
+    };
+  }
+
+  try {
+    return { ok: true as const, value: JSON.parse(text) as unknown };
+  } catch {
+    return {
+      ok: false as const,
+      response: c.json({ error: "invalid_payload" }, 400)
+    };
+  }
 }
 
 async function proxyAisJson(c: Context<AisAppContext>, path: string) {
@@ -307,7 +365,8 @@ async function callOpenRouterAI<T>(
   schema: Record<string, unknown>,
   apiKey: string,
   preferredModel?: string,
-  temperature = 0.1
+  temperature = 0.1,
+  timeoutMs = AIS_AI_DEFAULT_TIMEOUT_MS
 ): Promise<T> {
   const modelHierarchy = [
     preferredModel || "openrouter/aurora-alpha",
@@ -319,9 +378,12 @@ async function callOpenRouterAI<T>(
   let lastError: Error | null = null;
 
   for (const model of modelHierarchy) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
+        signal: controller.signal,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
@@ -359,6 +421,8 @@ async function callOpenRouterAI<T>(
       return JSON.parse(content) as T;
     } catch (error) {
       lastError = error as Error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -382,8 +446,16 @@ app.get("/nearby", async (c) => {
   const lon = Number(c.req.query("lon"));
   const radiusKm = Number(c.req.query("radius") ?? "25");
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return c.json({ error: "invalid_query", message: "lat and lon are required" }, 400);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    return c.json({ error: "invalid_query", message: "lat must be between -90 and 90" }, 400);
+  }
+
+  if (!Number.isFinite(lon) || lon < -180 || lon > 180) {
+    return c.json({ error: "invalid_query", message: "lon must be between -180 and 180" }, 400);
+  }
+
+  if (!Number.isFinite(radiusKm) || radiusKm <= 0 || radiusKm > 500) {
+    return c.json({ error: "invalid_query", message: "radius must be greater than 0 and no more than 500km" }, 400);
   }
 
   const vessels = await loadFallbackVessels(c.env, auth.tenantId);
@@ -422,15 +494,21 @@ app.get("/stats", async (c) => {
 
 app.post("/risk/assess", async (c) => {
   const openRouterKey = c.env.OPENROUTER_API_KEY;
-  const body = await c.req.json().catch(() => null) as {
+  const parsedBody = await readBoundedJson(c);
+  if (!parsedBody.ok) return parsedBody.response;
+
+  const body = parsedBody.value as {
     vessels?: Array<Record<string, unknown>>;
     weather?: Record<string, unknown>;
     fishingZone?: Record<string, unknown>;
-  } | null;
+  };
 
   const vessels = body?.vessels ?? [];
   if (!Array.isArray(vessels) || vessels.length === 0) {
     return c.json({ error: "invalid_payload", message: "vessels[] is required" }, 400);
+  }
+  if (vessels.length > AIS_AI_MAX_VESSELS) {
+    return c.json({ error: "too_many_vessels", max_vessels: AIS_AI_MAX_VESSELS }, 400);
   }
 
   const riskSchema = {
@@ -490,7 +568,10 @@ app.post("/risk/assess", async (c) => {
             }
           ],
           riskSchema,
-          openRouterKey
+          openRouterKey,
+          undefined,
+          0.1,
+          aisAiTimeoutMs(c.env)
         )
       )
     );
@@ -537,7 +618,10 @@ app.post("/risk/assess", async (c) => {
 
 app.post("/ai/recommendations", async (c) => {
   const openRouterKey = c.env.OPENROUTER_API_KEY;
-  const body = await c.req.json().catch(() => null);
+  const parsedBody = await readBoundedJson(c);
+  if (!parsedBody.ok) return parsedBody.response;
+
+  const body = parsedBody.value;
   if (!body || typeof body !== "object") {
     return c.json({ error: "invalid_payload" }, 400);
   }
@@ -588,7 +672,10 @@ app.post("/ai/recommendations", async (c) => {
         }
       ],
       recommendationSchema,
-      openRouterKey
+      openRouterKey,
+      undefined,
+      0.1,
+      aisAiTimeoutMs(c.env)
     );
 
     return c.json({ recommendations, ai_enhanced: true, model: "openrouter" });
@@ -604,11 +691,14 @@ app.post("/ai/recommendations", async (c) => {
 
 app.post("/risk/predict-collision", async (c) => {
   const openRouterKey = c.env.OPENROUTER_API_KEY;
-  const body = await c.req.json().catch(() => null) as {
+  const parsedBody = await readBoundedJson(c);
+  if (!parsedBody.ok) return parsedBody.response;
+
+  const body = parsedBody.value as {
     vesselA?: Record<string, unknown>;
     vesselB?: Record<string, unknown>;
     timeHorizon?: number;
-  } | null;
+  };
 
   if (!body?.vesselA || !body?.vesselB) {
     return c.json({ error: "invalid_payload", message: "vesselA and vesselB are required" }, 400);
@@ -671,7 +761,10 @@ app.post("/risk/predict-collision", async (c) => {
         }
       ],
       collisionSchema,
-      openRouterKey
+      openRouterKey,
+      undefined,
+      0.1,
+      aisAiTimeoutMs(c.env)
     );
 
     return c.json({ ...prediction, ai_enhanced: true, model: "openrouter" });
@@ -686,13 +779,19 @@ app.post("/risk/predict-collision", async (c) => {
 });
 
 app.post("/ai/behavior", async (c) => {
-  const body = await c.req.json().catch(() => null) as {
+  const parsedBody = await readBoundedJson(c);
+  if (!parsedBody.ok) return parsedBody.response;
+
+  const body = parsedBody.value as {
     mmsi?: string;
     observations?: Array<{ speed?: number; course?: number }>;
-  } | null;
+  };
 
   if (!body?.mmsi || !Array.isArray(body.observations)) {
     return c.json({ error: "invalid_payload" }, 400);
+  }
+  if (body.observations.length > AIS_AI_MAX_OBSERVATIONS) {
+    return c.json({ error: "too_many_observations", max_observations: AIS_AI_MAX_OBSERVATIONS }, 400);
   }
 
   const speeds = body.observations.map((item) => Number(item.speed ?? 0)).filter((value) => Number.isFinite(value));
@@ -741,6 +840,7 @@ app.get("/stream", async (c) => {
   const clientUrl = new URL(c.req.url);
   const upstreamBase = wsBase.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
   const upstreamUrl = new URL("stream", upstreamBase);
+  clientUrl.searchParams.delete("token");
   upstreamUrl.search = clientUrl.search;
 
   const pair = new WebSocketPair();

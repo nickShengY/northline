@@ -20,3 +20,4 @@ export * from './components/List';
 export * from './components/StatusIndicator';
 export * from './components/SyncIndicator';
 export * from './components/SafetyAlert';
+export * from './components/SessionGate';

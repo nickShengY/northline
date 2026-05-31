@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "./types";
 import { authMiddleware } from "./lib/auth";
@@ -17,13 +17,47 @@ import { catchRouter } from "./routes/catch";
 import { stationRouter } from "./routes/station";
 import { iceRouter } from "./routes/ice";
 import { projectionRouter } from "./routes/projection";
+import { authProviderConfig, authRouter } from "./routes/auth";
+import { auditRouter } from "./routes/audit";
+import { rateLimitMiddleware } from "./lib/rate-limit";
+export { RateLimiterDurableObject } from "./lib/rate-limit";
+import { buildReadinessReport } from "./lib/readiness";
+import { emitTelemetry } from "./lib/telemetry";
 
 const app = new Hono<{ Bindings: Env }>();
+
+function waitForTelemetry(c: Context<{ Bindings: Env }>, promise: Promise<void>) {
+  try {
+    c.executionCtx.waitUntil(promise);
+  } catch {
+    void promise;
+  }
+}
 
 function allowedOrigin(origin: string, env: Env) {
   if (env.APP_ENV === "development") return origin;
   const configured = env.CORS_ORIGIN?.split(",").map((item) => item.trim()).filter(Boolean) ?? [];
   return configured.includes(origin) ? origin : "";
+}
+
+function validatePathSegments(pathname: string) {
+  for (const rawSegment of pathname.split("/")) {
+    if (!rawSegment) continue;
+    let segment: string;
+    try {
+      segment = decodeURIComponent(rawSegment);
+    } catch {
+      return false;
+    }
+    if (segment.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(segment)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validateQueryLength(search: string) {
+  return search.length <= 4096;
 }
 
 app.use(
@@ -35,9 +69,104 @@ app.use(
     maxAge: 86400
   })
 );
-app.get("/health", (c) => c.json({ ok: true, env: c.env.APP_ENV }));
 
+app.use("*", async (c, next) => {
+  const requestId = c.req.header("x-request-id") ?? crypto.randomUUID();
+  const startedAt = Date.now();
+  const url = new URL(c.req.url);
+  const pathname = url.pathname;
+  let shortCircuitStatus: number | undefined;
+  c.header("x-request-id", requestId);
+  c.header("x-content-type-options", "nosniff");
+  c.header("x-frame-options", "DENY");
+  c.header("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  c.header("referrer-policy", "no-referrer");
+  c.header("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  if (c.env.APP_ENV !== "development") {
+    c.header("strict-transport-security", "max-age=31536000; includeSubDomains; preload");
+  }
+
+  try {
+    if (!validatePathSegments(pathname)) {
+      shortCircuitStatus = 400;
+      return c.json({
+        error: "invalid_route_path",
+        message: "path segments must be 1-128 URL-safe identifier characters",
+        request_id: requestId
+      }, 400);
+    }
+    if (!validateQueryLength(url.search)) {
+      shortCircuitStatus = 400;
+      return c.json({
+        error: "invalid_query_string",
+        message: "query string must be 4096 bytes or less",
+        request_id: requestId
+      }, 400);
+    }
+    await next();
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    const event = {
+      type: "request" as const,
+      request_id: requestId,
+      method: c.req.method,
+      path: pathname,
+      status: shortCircuitStatus ?? c.res.status,
+      duration_ms: durationMs,
+      env: c.env.APP_ENV
+    };
+    console.info(JSON.stringify(event));
+    waitForTelemetry(c, emitTelemetry(c.env, event));
+  }
+});
+
+app.onError((error, c) => {
+  const requestId = c.res.headers.get("x-request-id") ?? c.req.header("x-request-id") ?? crypto.randomUUID();
+  c.header("x-request-id", requestId);
+  if (error instanceof SyntaxError && c.req.header("content-type")?.toLowerCase().includes("application/json")) {
+    return c.json(
+      {
+        error: "invalid_payload",
+        message: "request body must be valid JSON",
+        request_id: requestId
+      },
+      400
+    );
+  }
+
+  const event = {
+    type: "error" as const,
+    request_id: requestId,
+    method: c.req.method,
+    path: new URL(c.req.url).pathname,
+    error: error.message,
+    env: c.env.APP_ENV
+  };
+  console.error(JSON.stringify(event));
+  waitForTelemetry(c, emitTelemetry(c.env, event));
+
+  return c.json(
+    {
+      error: "internal_error",
+      request_id: requestId
+    },
+    500
+  );
+});
+
+app.notFound((c) => c.json({ error: "not_found", path: new URL(c.req.url).pathname }, 404));
+
+app.get("/health", (c) => c.json({ ok: true, env: c.env.APP_ENV }));
+app.get("/ready", async (c) => {
+  const report = await buildReadinessReport(c.env);
+  return c.json(report, report.ok ? 200 : 503);
+});
+
+app.use("/v1/*", rateLimitMiddleware);
+app.get("/v1/auth/config", (c) => c.json(authProviderConfig(c.env)));
 app.use("/v1/*", authMiddleware);
+app.route("/v1/auth", authRouter);
+app.route("/v1/audit", auditRouter);
 app.route("/v1/sync", syncRouter);
 app.route("/v1/stl", stlRouter);
 app.route("/v1/ops", opsRouter);

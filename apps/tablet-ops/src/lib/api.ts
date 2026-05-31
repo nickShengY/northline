@@ -1,15 +1,17 @@
+import { readRuntimeToken } from "@northline/shared";
+
 const base = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
-function getRuntimeToken() {
-  if (typeof window === "undefined") return undefined;
-  return window.sessionStorage.getItem("northline.apiToken") ?? window.localStorage.getItem("northline.apiToken") ?? undefined;
+export const defaultDevToken = "demoTenant:captain_001:CAPTAIN";
+
+function pathSegment(value: string) {
+  return encodeURIComponent(value);
 }
 
 function getAuthToken() {
   const token = import.meta.env.DEV
-    ? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN
-    : getRuntimeToken();
-  if (!token && import.meta.env.DEV) return "demoTenant:captain_001:CAPTAIN";
+    ? readRuntimeToken() ?? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN ?? defaultDevToken
+    : readRuntimeToken();
   if (!token) {
     throw new Error("Missing API token. Sign in before using the Northline API.");
   }
@@ -30,6 +32,29 @@ async function parseJson<T>(response: Response, label: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+export async function getSession() {
+  const response = await fetch(`${base}/v1/auth/session`, {
+    headers: { Authorization: authHeader.Authorization }
+  });
+  return parseJson<{
+    tenant_id: string;
+    actor_id: string;
+    role: string;
+    capabilities: string[];
+    issued_at: string;
+  }>(response, "Session");
+}
+
+export async function getAuthConfig() {
+  const response = await fetch(`${base}/v1/auth/config`);
+  return parseJson<{
+    enabled: boolean;
+    login_url: string | null;
+    client_id?: string | null;
+    scopes?: string | null;
+  }>(response, "Auth configuration");
+}
+
 export async function listTrips() {
   const response = await fetch(`${base}/v1/ops/trips`, {
     headers: { Authorization: authHeader.Authorization }
@@ -38,7 +63,7 @@ export async function listTrips() {
 }
 
 export async function getTripGear(tripId: string) {
-  const response = await fetch(`${base}/v1/gear/trip/${tripId}?mode=OFFSHORE`, {
+  const response = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}?mode=OFFSHORE`, {
     headers: { Authorization: authHeader.Authorization }
   });
   return parseJson<{

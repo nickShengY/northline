@@ -1,4 +1,5 @@
-import { envelopeSchema, validatePayload } from "@northline/shared";
+import { computeEventHash, envelopeSchema, validatePayload } from "@northline/shared";
+import type { OpsEvent } from "@northline/shared";
 import type { Env } from "../types";
 import { verifyEventSignature } from "./signature";
 
@@ -27,7 +28,7 @@ export async function validateIncomingEventWithSignature(
   env: Env,
   tenantId: string,
   input: unknown
-): Promise<{ ok: true; event: ReturnType<typeof validateIncomingEvent>['event'] } | { ok: false; reason: unknown }> {
+): Promise<{ ok: true; event: OpsEvent } | { ok: false; reason: unknown }> {
   // First, validate schema
   const parsed = envelopeSchema.safeParse(input);
   if (!parsed.success) {
@@ -44,6 +45,15 @@ export async function validateIncomingEventWithSignature(
     ...parsed.data,
     payload_json: payloadResult.data
   };
+  const computedHash = await computeEventHash(event);
+
+  if (computedHash !== event.event_hash) {
+    return { ok: false, reason: { event_hash: "hash_mismatch" } };
+  }
+
+  if (env.APP_ENV === "development" && event.signature.startsWith("dev:")) {
+    return { ok: true, event };
+  }
 
   // Verify signature
   const sigResult = await verifyEventSignature(env, tenantId, {
@@ -53,7 +63,7 @@ export async function validateIncomingEventWithSignature(
   });
 
   if (!sigResult.valid) {
-    return { ok: false, reason: { signature_verification: sigResult.reason } };
+    return { ok: false, reason: { signature_verification: sigResult.reason ?? "invalid_signature" } };
   }
 
   return { ok: true, event };

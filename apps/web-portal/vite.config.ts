@@ -2,6 +2,21 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
+function manualChunks(id: string) {
+  const normalized = id.replace(/\\/g, "/");
+  if (id.includes("@northline/ui")) return "ui";
+  if (id.includes("@northline/shared")) return "shared";
+  if (id.includes("/src/components/charts") || id.includes("/src/components/RealTimeFleetAI")) return "visualizations";
+  if (id.includes("/src/components/LLMUsageDashboard") || id.includes("/src/lib/openrouter-ai")) return "ai";
+  if (id.includes("/src/lib/")) return "api-client";
+  if (normalized.includes("/node_modules/")) {
+    const pnpmPackage = normalized.match(/node_modules\/\.pnpm\/((?:@[^/+]+\+)?[^/@]+)@/);
+    const nodePackage = normalized.match(/node_modules\/((?:@[^/]+\/)?[^/]+)/);
+    const packageName = (pnpmPackage?.[1] ?? nodePackage?.[1] ?? "misc").replace(/[@/+]/g, "-");
+    return `vendor-${packageName}`;
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -52,10 +67,7 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ["react", "react-dom"],
-          ui: ["@northline/shared"]
-        }
+        manualChunks
       }
     }
   }

@@ -5,14 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local --persist-to .wrangler/state",
-    "build": "wrangler deploy --dry-run",
+    "build": "wrangler deploy --dry-run --env=\"\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:db": "vitest run test/db-integration.test.ts"
   },
   "dependencies": {
-    "@northline/shared": "workspace:*",
     "@hono/zod-validator": "^0.4.2",
     "@neondatabase/serverless": "^0.10.4",
+    "@northline/shared": "workspace:*",
     "hono": "^4.6.18",
     "jose": "^5.9.6",
     "pg": "^8.16.3",
@@ -20,10 +21,10 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260531.1",
     "@types/pg": "^8.15.5",
-    "@cloudflare/workers-types": "^4.20250124.0",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8",
-    "wrangler": "^3.103.0"
+    "wrangler": "^4.95.0"
   }
 }

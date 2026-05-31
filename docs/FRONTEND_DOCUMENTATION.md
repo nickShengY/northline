@@ -26,9 +26,18 @@ Purpose:
 
 Productivity features:
 - Command Center for fast action execution
+- Role Command Center for owner, captain, compliance, and admin workflows
 - Workspace presets (save/apply context trip/certificate/lot IDs)
 - Batch trip workflows (multi-trip compliance sign/export)
+- Guided compliance closeout with trace lot, blocker, signing, and export stages
+- Trusted-device administration and audited ruleset publishing controls
+- Audit Console for admin/owner review of sensitive operation history
 - Session activity feed for operational traceability
+
+Security boundary:
+- All active apps start behind the shared `SessionGate`
+- Runtime tokens are verified through `/v1/auth/session` before rendering the workspace
+- Production browser builds use entered runtime tokens, not static `VITE_*` bearer tokens
 
 Tech stack:
 - React 18 + TypeScript
@@ -50,6 +59,7 @@ Purpose:
 - Gear status and transition controls
 - Man-overboard and all-hands safety actions
 - Bridge log, connected-device state, and live risk context
+- Bridge decision-support playbook and watch handoff checklist
 
 Tech stack:
 - React 18 + TypeScript
@@ -80,6 +90,7 @@ Core modules:
 Productivity features:
 - Quick command launcher for high-frequency actions
 - Offline queue manager with manual sync/export/clear controls
+- Sync repair review showing accepted/rejected events, rejection reasons, reconciliation, and quarantine controls
 - Shift notes and clipboard-ready handoff summary
 - Pinned modules and recent activity timeline
 

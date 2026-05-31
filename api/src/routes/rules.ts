@@ -1,8 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { fitsJsonByteLimit } from "../lib/json-size";
+import { validateOptionalQueryParam } from "../lib/route-params";
 
 const modeSchema = z.enum(["OFFSHORE", "ICE"]);
 
@@ -13,22 +17,35 @@ const rulesetUpsertSchema = z.object({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   effective_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   priority: z.number().int().min(1).default(100),
-  rules_json: z.record(z.unknown())
+  rules_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(64 * 1024),
+    "rules_json must be 65536 bytes or less"
+  )
 });
 
 const riskPolicyUpsertSchema = z.object({
   policy_id: z.string().min(3),
   mode: modeSchema.optional(),
-  policy_json: z.record(z.unknown())
+  policy_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(32 * 1024),
+    "policy_json must be 32768 bytes or less"
+  )
 });
 
-export const rulesRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const rulesRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 rulesRouter.get("/effective", async (c) => {
   const auth = c.get("auth");
   const modeResult = modeSchema.safeParse(c.req.query("mode"));
-  const regionCode = c.req.query("region") ?? "default";
-  const effectiveDate = c.req.query("effective_date") ?? new Date().toISOString().slice(0, 10);
+  const regionResult = validateOptionalQueryParam("region", c.req.query("region"));
+  if (!regionResult.ok) return c.json(regionResult.error, 400);
+  const regionCode = regionResult.value ?? "default";
+  const effectiveDateResult = validateOptionalQueryParam("effective_date", c.req.query("effective_date"), {
+    maxLength: 10,
+    pattern: /^\d{4}-\d{2}-\d{2}$/
+  });
+  if (!effectiveDateResult.ok) return c.json(effectiveDateResult.error, 400);
+  const effectiveDate = effectiveDateResult.value ?? new Date().toISOString().slice(0, 10);
 
   if (!modeResult.success) {
     return c.json({ error: "invalid_mode" }, 400);
@@ -56,7 +73,9 @@ rulesRouter.get("/effective", async (c) => {
 
 rulesRouter.get("/risk-policy", async (c) => {
   const auth = c.get("auth");
-  const mode = c.req.query("mode");
+  const modeResult = modeSchema.optional().safeParse(c.req.query("mode"));
+  if (!modeResult.success) return c.json({ error: "invalid_mode" }, 400);
+  const mode = modeResult.data;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return mode
@@ -84,7 +103,9 @@ rulesRouter.get("/risk-policy", async (c) => {
 
 rulesRouter.get("/all", async (c) => {
   const auth = c.get("auth");
-  const mode = c.req.query("mode");
+  const modeResult = modeSchema.optional().safeParse(c.req.query("mode"));
+  if (!modeResult.success) return c.json({ error: "invalid_mode" }, 400);
+  const mode = modeResult.data;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return mode
@@ -108,7 +129,7 @@ rulesRouter.get("/all", async (c) => {
   return c.json({ rulesets: rows.map((row) => ({ ...row })) });
 });
 
-rulesRouter.post("/upsert", async (c) => {
+rulesRouter.post("/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = rulesetUpsertSchema.safeParse(body);
@@ -151,10 +172,24 @@ rulesRouter.post("/upsert", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "ruleset.upsert",
+    subjectType: "RULESET",
+    subjectId: parsed.data.ruleset_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      mode: parsed.data.mode,
+      region_code: parsed.data.region_code,
+      effective_from: parsed.data.effective_from
+    }
+  });
+
   return c.json({ ok: true, ruleset_id: parsed.data.ruleset_id, emitted_event_id: emitted.event_id });
 });
 
-rulesRouter.post("/risk-policy/upsert", async (c) => {
+rulesRouter.post("/risk-policy/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = riskPolicyUpsertSchema.safeParse(body);
@@ -174,6 +209,18 @@ rulesRouter.post("/risk-policy/upsert", async (c) => {
       set mode = excluded.mode,
           policy_json = excluded.policy_json
     `;
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "risk_policy.upsert",
+    subjectType: "RISK_POLICY",
+    subjectId: parsed.data.policy_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      mode: parsed.data.mode ?? null
+    }
   });
 
   return c.json({ ok: true, policy_id: parsed.data.policy_id });

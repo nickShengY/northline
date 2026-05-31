@@ -14,12 +14,23 @@ Mode switching:
 ## Web Portal (`/apps/web-portal`)
 
 1. Fleet dashboard
-2. Trip state inspector
-3. Risk and incident monitor
-4. Trace and certificate verification
-5. Integrations and devices
-6. Rulesets and sync health
-7. Visualization surface
+2. Role command center
+3. Trip state inspector
+4. Risk and incident monitor
+5. Guided trace/compliance closeout
+6. Trace and certificate verification
+7. Integrations, trusted devices, and rulesets
+8. Audit console and sync health
+9. Visualization surface
+
+## Tablet Ops (`/apps/tablet-ops`)
+
+1. Vessel status and emergency command
+2. Bridge decision-support playbook
+3. Watch handoff checklist
+4. Gear status and transition board
+5. Connected devices
+6. Bridge log and activity timeline
 
 ## UX State Model
 
@@ -34,3 +45,4 @@ Each active app should expose:
 
 - Mobile Ops: touch-first, single-column first, scales up to tablet
 - Web Portal: dashboard density with readable typography and stable panel scaling
+- Tablet Ops: bridge-safe action density, large emergency controls, and reviewable handoff state

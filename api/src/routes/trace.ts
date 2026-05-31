@@ -1,17 +1,35 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { generateCertificate } from "../services/certificate";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
 import { detectScanMismatch, mergeSpeciesTotals } from "../services/trace";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { fitsJsonByteLimit } from "../lib/json-size";
+import { validateOptionalQueryParam } from "../lib/route-params";
+
+const speciesTotalsSchema = z.record(
+  z.string().min(1).max(80),
+  z.number().nonnegative()
+).refine(
+  (totals) => Object.keys(totals).length <= 100,
+  "species_totals must contain 100 species or fewer"
+).refine(
+  fitsJsonByteLimit(8 * 1024),
+  "species_totals must be 8192 bytes or less"
+);
 
 const lotCreateSchema = z.object({
   lot_id: z.string().min(3),
   trip_id: z.string().min(3),
   mode: z.enum(["OFFSHORE", "ICE"]),
-  species_totals: z.record(z.number()).default({}),
-  quality_json: z.record(z.unknown()).default({})
+  species_totals: speciesTotalsSchema.default({}),
+  quality_json: z.record(z.unknown()).default({}).refine(
+    fitsJsonByteLimit(16 * 1024),
+    "quality_json must be 16384 bytes or less"
+  )
 });
 
 const lotScanAttachSchema = z.object({
@@ -19,18 +37,18 @@ const lotScanAttachSchema = z.object({
   trip_id: z.string().min(3),
   batch_id: z.string().min(3),
   source: z.enum(["API", "CSV", "JSON", "MANUAL"]),
-  species_totals: z.record(z.number()).default({})
+  species_totals: speciesTotalsSchema.default({})
 });
 
 const certificateRequestSchema = z.object({
   lot_id: z.string(),
   trip_id: z.string(),
   vessel_or_group: z.string(),
-  event_ids: z.array(z.string()).min(1),
-  stats: z.record(z.any()).default({})
+  event_ids: z.array(z.string()).min(1).max(500),
+  stats: z.record(z.any()).default({}).refine(fitsJsonByteLimit(16 * 1024), "stats must be 16384 bytes or less")
 });
 
-export const traceRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const traceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 traceRouter.post("/lot/create", async (c) => {
   const auth = c.get("auth");
@@ -200,7 +218,9 @@ traceRouter.get("/lot/:lotId", async (c) => {
 
 traceRouter.get("/lots", async (c) => {
   const auth = c.get("auth");
-  const tripId = c.req.query("trip_id");
+  const tripIdResult = validateOptionalQueryParam("trip_id", c.req.query("trip_id"));
+  if (!tripIdResult.ok) return c.json(tripIdResult.error, 400);
+  const tripId = tripIdResult.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return tripId
@@ -224,7 +244,7 @@ traceRouter.get("/lots", async (c) => {
   return c.json({ lots: rows });
 });
 
-traceRouter.post("/certificate/issue", async (c) => {
+traceRouter.post("/certificate/issue", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = certificateRequestSchema.safeParse(body);
@@ -292,13 +312,32 @@ traceRouter.post("/certificate/issue", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "certificate.issue",
+    subjectType: "CERTIFICATE",
+    subjectId: certificate.certificate_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      lot_id: parsed.data.lot_id,
+      trip_id: parsed.data.trip_id,
+      hash: certificate.hash,
+      event_count: parsed.data.event_ids.length
+    }
+  });
+
   return c.json({ ok: true, certificate, artifact_key: key, emitted_event_id: emitted.event_id });
 });
 
 traceRouter.get("/certificates", async (c) => {
   const auth = c.get("auth");
-  const lotId = c.req.query("lot_id");
-  const tripId = c.req.query("trip_id");
+  const lotIdResult = validateOptionalQueryParam("lot_id", c.req.query("lot_id"));
+  if (!lotIdResult.ok) return c.json(lotIdResult.error, 400);
+  const tripIdResult = validateOptionalQueryParam("trip_id", c.req.query("trip_id"));
+  if (!tripIdResult.ok) return c.json(tripIdResult.error, 400);
+  const lotId = lotIdResult.value;
+  const tripId = tripIdResult.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     if (lotId) {

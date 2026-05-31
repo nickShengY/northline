@@ -8,7 +8,9 @@
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
-    "test": "turbo test"
+    "test": "turbo test",
+    "release:check": "pnpm typecheck && pnpm test && pnpm build",
+    "test:db": "pnpm --filter @northline/api test:db"
   },
   "devDependencies": {
     "turbo": "^2.4.0",

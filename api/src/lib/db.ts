@@ -41,6 +41,26 @@ function shouldUseNodePostgres(connectionString: string) {
   }
 }
 
+export async function pingDatabase(env: Env): Promise<void> {
+  if (!env.NEON_DATABASE_URL) {
+    throw new Error("NEON_DATABASE_URL is required for database access");
+  }
+
+  if (shouldUseNodePostgres(env.NEON_DATABASE_URL)) {
+    const client = new Client({ connectionString: env.NEON_DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query("select 1");
+    } finally {
+      await client.end();
+    }
+    return;
+  }
+
+  const sql = getSql(env);
+  await sql`select 1`;
+}
+
 export async function withTenant<T>(
   env: Env,
   tenantId: string,

@@ -205,6 +205,71 @@ h3 { font-size: clamp(1.05rem, 1.1vw, 1.35rem); }
   font-size: 1.125rem;
 }
 
+.role-view-button,
+.workflow-step {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 4rem;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  background: var(--glass-bg);
+  box-shadow: var(--glass-shadow);
+}
+
+.role-view-button {
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+}
+
+.role-view-button:hover,
+.role-view-button.active {
+  transform: translateY(-1px);
+  border-color: var(--line-hover);
+  background: var(--glass-bg-hover);
+}
+
+.role-view-button span,
+.workflow-step span {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.role-view-button small,
+.workflow-step small {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+}
+
+.admin-form {
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--glass-bg) 86%, transparent);
+}
+
+.admin-inline {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.7fr) minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.admin-inline select {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  background: var(--bg-soft-2);
+}
+
 /* Eyebrow Label */
 .eyebrow {
   text-transform: uppercase;

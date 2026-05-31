@@ -16,3 +16,11 @@ preview_bucket_name = "northline-artifacts-preview"
 binding = "DB"
 database_name = "northline-db"
 database_id = ""
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiterDurableObject"]

@@ -1,8 +1,14 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { fitsJsonByteLimit } from "../lib/json-size";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { validateRouteParam } from "../lib/route-params";
+
+const pointSchema = z.object({ lat: z.number().gte(-90).lte(90), lon: z.number().gte(-180).lte(180) });
 
 const iceThicknessSchema = z.object({
   log_id: z.string().min(3),
@@ -10,7 +16,7 @@ const iceThicknessSchema = z.object({
   station_id: z.string().optional(),
   thickness_cm: z.number().positive(),
   confidence: z.number().min(0).max(1).default(0.5),
-  location: z.object({ lat: z.number(), lon: z.number() }),
+  location: pointSchema,
   photo_ref: z.string().optional(),
   notes: z.string().max(500).optional()
 });
@@ -20,7 +26,7 @@ const routePointSchema = z.object({
   trip_id: z.string().min(3),
   sequence: z.number().int().min(0),
   point_type: z.enum(["WAYPOINT", "HAZARD_AVOID", "STATION", "ACCESS_POINT", "SHELTER"]),
-  location: z.object({ lat: z.number(), lon: z.number() }),
+  location: pointSchema,
   notes: z.string().max(500).optional()
 });
 
@@ -29,15 +35,18 @@ const returnPlanSchema = z.object({
   trip_id: z.string().min(3),
   return_by: z.string().datetime(),
   access_point: z.string().optional(),
-  route_summary: z.record(z.unknown()).optional(),
+  route_summary: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(8 * 1024),
+    "route_summary must be 8192 bytes or less"
+  ).optional(),
   escalation_contacts: z.array(z.object({
     name: z.string(),
     phone: z.string().optional(),
     relation: z.string().optional()
-  })).default([])
+  })).max(10).default([])
 });
 
-export const iceRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const iceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 // Ice thickness logging
 iceRouter.post("/thickness", async (c) => {
@@ -187,9 +196,13 @@ iceRouter.get("/route/:tripId", async (c) => {
   return c.json({ trip_id: tripId, route: rows });
 });
 
-iceRouter.delete("/route-point/:pointId", async (c) => {
+iceRouter.delete("/route-point/:pointId", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const pointId = c.req.param("pointId");
+  const parsedPointId = validateRouteParam("pointId", c.req.param("pointId"));
+  if (!parsedPointId.ok) {
+    return c.json(parsedPointId.error, 400);
+  }
+  const pointId = parsedPointId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -202,6 +215,17 @@ iceRouter.delete("/route-point/:pointId", async (c) => {
   if (!rows.length) {
     return c.json({ ok: false, reason: "point_not_found" }, 404);
   }
+
+  const row = rows[0] as { point_id: string; trip_id: string };
+  await writeAuditLog(c.env, {
+    auth,
+    action: "ice.route_point_delete",
+    subjectType: "TRIP",
+    subjectId: row.trip_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: { point_id: row.point_id }
+  });
 
   return c.json({ ok: true, point_id: pointId });
 });
@@ -255,7 +279,11 @@ iceRouter.post("/return-plan", async (c) => {
 
 iceRouter.post("/return-plan/:planId/escalate", async (c) => {
   const auth = c.get("auth");
-  const planId = c.req.param("planId");
+  const parsedPlanId = validateRouteParam("planId", c.req.param("planId"));
+  if (!parsedPlanId.ok) {
+    return c.json(parsedPlanId.error, 400);
+  }
+  const planId = parsedPlanId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -286,12 +314,30 @@ iceRouter.post("/return-plan/:planId/escalate", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "ice.return_plan_escalate",
+    subjectType: "TRIP",
+    subjectId: row.trip_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      plan_id: row.plan_id,
+      return_by: row.return_by,
+      emitted_event_id: emitted.event_id
+    }
+  });
+
   return c.json({ ok: true, plan: row, emitted_event_id: emitted.event_id });
 });
 
 iceRouter.post("/return-plan/:planId/complete", async (c) => {
   const auth = c.get("auth");
-  const planId = c.req.param("planId");
+  const parsedPlanId = validateRouteParam("planId", c.req.param("planId"));
+  if (!parsedPlanId.ok) {
+    return c.json(parsedPlanId.error, 400);
+  }
+  const planId = parsedPlanId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -308,6 +354,16 @@ iceRouter.post("/return-plan/:planId/complete", async (c) => {
   }
 
   const row = rows[0] as { plan_id: string; trip_id: string };
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "ice.return_plan_complete",
+    subjectType: "TRIP",
+    subjectId: row.trip_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: { plan_id: row.plan_id }
+  });
 
   return c.json({ ok: true, plan_id: row.plan_id, trip_id: row.trip_id });
 });

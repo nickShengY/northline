@@ -1,8 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { validateOptionalQueryParam, validateRouteParam } from "../lib/route-params";
+
+const pointSchema = z.object({ lat: z.number().gte(-90).lte(90), lon: z.number().gte(-180).lte(180) });
 
 const stationCreateSchema = z.object({
   station_id: z.string().min(3),
@@ -10,7 +15,7 @@ const stationCreateSchema = z.object({
   name: z.string().min(2),
   hole_count: z.number().int().min(0).default(0),
   tipup_count: z.number().int().min(0).default(0),
-  location: z.object({ lat: z.number(), lon: z.number() }),
+  location: pointSchema,
   notes: z.string().max(500).optional()
 });
 
@@ -19,7 +24,7 @@ const stationUpdateSchema = z.object({
   name: z.string().min(2).optional(),
   hole_count: z.number().int().min(0).optional(),
   tipup_count: z.number().int().min(0).optional(),
-  location: z.object({ lat: z.number(), lon: z.number() }).optional(),
+  location: pointSchema.optional(),
   notes: z.string().max(500).optional()
 });
 
@@ -31,7 +36,7 @@ const tipupSchema = z.object({
   bait: z.string().optional(),
   depth_m: z.number().positive().optional(),
   check_interval_min: z.number().int().positive().default(15),
-  location: z.object({ lat: z.number(), lon: z.number() }).optional()
+  location: pointSchema.optional()
 });
 
 const tipupTransitionSchema = z.object({
@@ -41,7 +46,7 @@ const tipupTransitionSchema = z.object({
   note: z.string().max(500).optional()
 });
 
-export const stationRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const stationRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 stationRouter.post("/create", async (c) => {
   const auth = c.get("auth");
@@ -132,9 +137,13 @@ stationRouter.post("/update", async (c) => {
   return c.json({ ok: true, station: row, emitted_event_id: emitted.event_id });
 });
 
-stationRouter.post("/remove/:stationId", async (c) => {
+stationRouter.post("/remove/:stationId", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const stationId = c.req.param("stationId");
+  const parsedStationId = validateRouteParam("stationId", c.req.param("stationId"));
+  if (!parsedStationId.ok) {
+    return c.json(parsedStationId.error, 400);
+  }
+  const stationId = parsedStationId.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -159,6 +168,19 @@ stationRouter.post("/remove/:stationId", async (c) => {
     payload_json: {
       station_id: row.station_id,
       trip_id: row.trip_id
+    }
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "station.remove",
+    subjectType: "TRIP",
+    subjectId: row.trip_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      station_id: row.station_id,
+      emitted_event_id: emitted.event_id
     }
   });
 
@@ -306,7 +328,9 @@ stationRouter.post("/tipup/transition", async (c) => {
 stationRouter.get("/tipups/:tripId", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const stationId = c.req.query("station_id");
+  const stationIdResult = validateOptionalQueryParam("station_id", c.req.query("station_id"));
+  if (!stationIdResult.ok) return c.json(stationIdResult.error, 400);
+  const stationId = stationIdResult.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     if (stationId) {

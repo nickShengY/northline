@@ -1,20 +1,78 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
 import { rebuildAllProjections, rebuildTripState, rebuildGearStateOffshore, rebuildCatchRollups } from "../services/projection";
-import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+
+const projectionTypeSchema = z.enum(["trip_state", "gear_state", "catch_rollups", "all"]);
 
 const rebuildSchema = z.object({
   trip_id: z.string().min(3),
-  projection_types: z.array(z.enum(["trip_state", "gear_state", "catch_rollups", "all"])).optional()
+  projection_types: z.array(projectionTypeSchema).min(1).max(4).optional()
 });
 
-export const projectionRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+const batchRebuildSchema = z.object({
+  trip_ids: z.array(z.string().min(3)).min(1).max(50)
+});
 
-projectionRouter.post("/rebuild", async (c) => {
+type ProjectionContext = Context<{ Bindings: Env; Variables: { auth: AuthContext } }>;
+
+async function readProjectionJson(c: ProjectionContext) {
+  try {
+    return await c.req.json();
+  } catch {
+    return undefined;
+  }
+}
+
+type ProjectionType = z.infer<typeof projectionTypeSchema>;
+
+function normalizeProjectionTypes(types: ProjectionType[] | undefined): ProjectionType[] {
+  if (!types?.length || types.includes("all")) return ["all"];
+  return [...new Set(types)];
+}
+
+export function summarizeProjectionBatchResults(results: Record<string, unknown>) {
+  const failed_count = Object.values(results).filter((result) => {
+    return countProjectionErrors(result) > 0;
+  }).length;
+
+  return {
+    total_count: Object.keys(results).length,
+    succeeded_count: Object.keys(results).length - failed_count,
+    failed_count
+  };
+}
+
+export function countProjectionErrors(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  if ("ok" in value && value.ok === false) return 1;
+
+  let count = 0;
+  if ("errors" in value && Array.isArray(value.errors)) {
+    count += value.errors.length;
+  }
+
+  for (const item of Object.values(value)) {
+    if (item && typeof item === "object") {
+      count += countProjectionErrors(item);
+    }
+  }
+
+  return count;
+}
+
+export const projectionRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
+
+projectionRouter.post("/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const body = await readProjectionJson(c);
+  if (body === undefined) {
+    return c.json({ error: "invalid_payload", message: "request body must be valid JSON" }, 400);
+  }
+
   const parsed = rebuildSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -22,12 +80,22 @@ projectionRouter.post("/rebuild", async (c) => {
   }
 
   const tripId = parsed.data.trip_id;
-  const types = parsed.data.projection_types || ["all"];
+  const types = normalizeProjectionTypes(parsed.data.projection_types);
 
   try {
     if (types.includes("all")) {
       const results = await rebuildAllProjections(c.env, auth.tenantId, tripId);
-      return c.json({ ok: true, trip_id: tripId, results });
+      const errorCount = countProjectionErrors(results);
+      await writeAuditLog(c.env, {
+        auth,
+        action: "projection.rebuild",
+        subjectType: "TRIP",
+        subjectId: tripId,
+        outcome: errorCount > 0 ? "FAILED" : "SUCCESS",
+        requestId: c.req.header("x-request-id"),
+        metadata: { projection_types: types, error_count: errorCount }
+      });
+      return c.json({ ok: errorCount === 0, trip_id: tripId, error_count: errorCount, results }, errorCount > 0 ? 500 : 200);
     }
 
     // Fetch events for selective rebuild
@@ -37,7 +105,7 @@ projectionRouter.post("/rebuild", async (c) => {
         from ops_event
         where tenant_id = ${auth.tenantId}
           and (payload_json->>'trip_id' = ${tripId} or subject_id = ${tripId})
-        order by ts_device asc
+        order by ts_server asc, event_id asc
       `;
     }) as unknown[];
 
@@ -55,8 +123,28 @@ projectionRouter.post("/rebuild", async (c) => {
       results.catch_rollups = await rebuildCatchRollups(c.env, auth.tenantId, tripId, events as Parameters<typeof rebuildCatchRollups>[3]);
     }
 
-    return c.json({ ok: true, trip_id: tripId, results });
+    const errorCount = countProjectionErrors(results);
+    await writeAuditLog(c.env, {
+      auth,
+      action: "projection.rebuild",
+      subjectType: "TRIP",
+      subjectId: tripId,
+      outcome: errorCount > 0 ? "FAILED" : "SUCCESS",
+      requestId: c.req.header("x-request-id"),
+      metadata: { projection_types: types, error_count: errorCount }
+    });
+
+    return c.json({ ok: errorCount === 0, trip_id: tripId, error_count: errorCount, results }, errorCount > 0 ? 500 : 200);
   } catch (err) {
+    await writeAuditLog(c.env, {
+      auth,
+      action: "projection.rebuild",
+      subjectType: "TRIP",
+      subjectId: tripId,
+      outcome: "FAILED",
+      requestId: c.req.header("x-request-id"),
+      metadata: { projection_types: types, error: err instanceof Error ? err.message : "rebuild_failed" }
+    });
     return c.json({
       ok: false,
       error: err instanceof Error ? err.message : "rebuild_failed"
@@ -64,20 +152,23 @@ projectionRouter.post("/rebuild", async (c) => {
   }
 });
 
-projectionRouter.post("/rebuild/batch", async (c) => {
+projectionRouter.post("/rebuild/batch", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
-  const parsed = z.object({
-    trip_ids: z.array(z.string().min(3)).max(50)
-  }).safeParse(body);
+  const body = await readProjectionJson(c);
+  if (body === undefined) {
+    return c.json({ error: "invalid_payload", message: "request body must be valid JSON" }, 400);
+  }
+
+  const parsed = batchRebuildSchema.safeParse(body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
+  const tripIds = [...new Set(parsed.data.trip_ids)];
   const results: Record<string, unknown> = {};
 
-  for (const tripId of parsed.data.trip_ids) {
+  for (const tripId of tripIds) {
     try {
       results[tripId] = await rebuildAllProjections(c.env, auth.tenantId, tripId);
     } catch (err) {
@@ -88,7 +179,21 @@ projectionRouter.post("/rebuild/batch", async (c) => {
     }
   }
 
-  return c.json({ ok: true, results });
+  const summary = summarizeProjectionBatchResults(results);
+  await writeAuditLog(c.env, {
+    auth,
+    action: "projection.rebuild_batch",
+    subjectType: "TRIP",
+    subjectId: tripIds.join(","),
+    outcome: summary.failed_count > 0 ? "FAILED" : "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_count: tripIds.length,
+      ...summary
+    }
+  });
+
+  return c.json({ ok: summary.failed_count === 0, ...summary, results });
 });
 
 projectionRouter.get("/status/:tripId", async (c) => {

@@ -1,17 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { readRuntimeToken } from "@northline/shared";
 import type { VesselPosition } from "../components/charts";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
-function getRuntimeToken() {
-  if (typeof window === "undefined") return undefined;
-  return window.sessionStorage.getItem("northline.apiToken") ?? window.localStorage.getItem("northline.apiToken") ?? undefined;
-}
-
 function getAuthHeaders() {
   const token = import.meta.env.DEV
-    ? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN
-    : getRuntimeToken();
+    ? readRuntimeToken() ?? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN
+    : readRuntimeToken();
   const resolvedToken = token || (import.meta.env.DEV ? "demoTenant:portal_admin:ORG_ADMIN" : "");
   if (!resolvedToken) {
     throw new Error("Missing API token. Sign in before using the Northline API.");
@@ -20,6 +16,14 @@ function getAuthHeaders() {
     Authorization: `Bearer ${resolvedToken}`,
     "Content-Type": "application/json"
   };
+}
+
+function queryString(params: Record<string, number>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    search.set(key, String(value));
+  }
+  return search.toString();
 }
 
 interface AISVesselData {
@@ -342,7 +346,8 @@ export function useAISBackend(
 
   const fetchNearby = useCallback(async (lat: number, lon: number, radius: number) => {
     try {
-      const response = await fetch(`${API_BASE}/v1/ais/nearby?lat=${lat}&lon=${lon}&radius=${radius}`, {
+      const query = queryString({ lat, lon, radius });
+      const response = await fetch(`${API_BASE}/v1/ais/nearby?${query}`, {
         headers: getAuthHeaders()
       });
       if (!response.ok) {

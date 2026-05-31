@@ -1,8 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { validateOptionalQueryParam } from "../lib/route-params";
+
+const pointSchema = z.object({ lat: z.number().gte(-90).lte(90), lon: z.number().gte(-180).lte(180) });
 
 const catchRecordSchema = z.object({
   catch_id: z.string().min(3),
@@ -17,16 +22,32 @@ const catchRecordSchema = z.object({
   station_id: z.string().optional(),
   gear_id: z.string().optional(),
   method: z.string().optional(),
-  location: z.object({ lat: z.number(), lon: z.number() }).optional(),
-  photo_refs: z.array(z.string()).optional(),
+  location: pointSchema.optional(),
+  photo_refs: z.array(z.string()).max(20).optional(),
   measurement_confidence: z.number().min(0).max(1).optional(),
   qa_flagged: z.boolean().default(false),
   qa_reason: z.string().optional()
 });
 
+const catchCorrectionFieldsSchema = z.object({
+  species: z.string().min(2).optional(),
+  kept: z.boolean().optional(),
+  release_reason: z.string().optional(),
+  length_cm: z.number().positive().optional(),
+  weight_kg: z.number().positive().optional(),
+  station_id: z.string().optional(),
+  gear_id: z.string().optional(),
+  method: z.string().optional(),
+  measurement_confidence: z.number().min(0).max(1).optional(),
+  qa_flagged: z.boolean().optional(),
+  qa_reason: z.string().optional()
+}).strict().refine((value) => Object.keys(value).length > 0, {
+  message: "at least one correction field is required"
+});
+
 const catchCorrectSchema = z.object({
   catch_id: z.string().min(3),
-  corrections: z.record(z.unknown())
+  corrections: catchCorrectionFieldsSchema
 });
 
 const catchMeasurementSchema = z.object({
@@ -43,7 +64,7 @@ const catchQASchema = z.object({
   reason: z.string().min(3)
 });
 
-export const catchRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const catchRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 catchRouter.post("/record", async (c) => {
   const auth = c.get("auth");
@@ -109,7 +130,7 @@ catchRouter.post("/record", async (c) => {
   return c.json({ ok: true, catch_id: parsed.data.catch_id, emitted_event_id: emitted.event_id });
 });
 
-catchRouter.post("/correct", async (c) => {
+catchRouter.post("/correct", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = catchCorrectSchema.safeParse(body);
@@ -118,12 +139,24 @@ catchRouter.post("/correct", async (c) => {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
+  const corrections = parsed.data.corrections;
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
       update catch_record
-      set corrected_at = now()
+      set species = coalesce(${corrections.species ?? null}, species),
+          kept = coalesce(${corrections.kept ?? null}, kept),
+          release_reason = coalesce(${corrections.release_reason ?? null}, release_reason),
+          length_cm = coalesce(${corrections.length_cm ?? null}, length_cm),
+          weight_kg = coalesce(${corrections.weight_kg ?? null}, weight_kg),
+          station_id = coalesce(${corrections.station_id ?? null}, station_id),
+          gear_id = coalesce(${corrections.gear_id ?? null}, gear_id),
+          method = coalesce(${corrections.method ?? null}, method),
+          measurement_confidence = coalesce(${corrections.measurement_confidence ?? null}, measurement_confidence),
+          qa_flagged = coalesce(${corrections.qa_flagged ?? null}, qa_flagged),
+          qa_reason = coalesce(${corrections.qa_reason ?? null}, qa_reason),
+          corrected_at = now()
       where tenant_id = ${auth.tenantId} and catch_id = ${parsed.data.catch_id}
-      returning catch_id, trip_id, species
+      returning catch_id, trip_id, species, kept, length_cm, weight_kg
     `;
   });
 
@@ -131,7 +164,7 @@ catchRouter.post("/correct", async (c) => {
     return c.json({ ok: false, reason: "catch_not_found" }, 404);
   }
 
-  const row = rows[0] as { catch_id: string; trip_id: string; species: string };
+  const row = rows[0] as { catch_id: string; trip_id: string; species: string; kept: boolean; length_cm: number | null; weight_kg: number | null };
   const emitted = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "ORG",
     subject_id: row.trip_id,
@@ -141,6 +174,20 @@ catchRouter.post("/correct", async (c) => {
       catch_id: parsed.data.catch_id,
       trip_id: row.trip_id,
       corrections: parsed.data.corrections
+    }
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "catch.correct",
+    subjectType: "CATCH",
+    subjectId: parsed.data.catch_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_id: row.trip_id,
+      corrected_fields: Object.keys(parsed.data.corrections),
+      emitted_event_id: emitted.event_id
     }
   });
 
@@ -190,7 +237,7 @@ catchRouter.post("/measurement", async (c) => {
   return c.json({ ok: true, catch: row, emitted_event_id: emitted.event_id });
 });
 
-catchRouter.post("/qa", async (c) => {
+catchRouter.post("/qa", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = catchQASchema.safeParse(body);
@@ -227,13 +274,29 @@ catchRouter.post("/qa", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: parsed.data.flagged ? "catch.qa_flag" : "catch.qa_resolve",
+    subjectType: "CATCH",
+    subjectId: parsed.data.catch_id,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      trip_id: row.trip_id,
+      flagged: parsed.data.flagged,
+      emitted_event_id: emitted.event_id
+    }
+  });
+
   return c.json({ ok: true, catch: row, emitted_event_id: emitted.event_id });
 });
 
 catchRouter.get("/trip/:tripId", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const species = c.req.query("species");
+  const speciesResult = validateOptionalQueryParam("species", c.req.query("species"), { maxLength: 80 });
+  if (!speciesResult.ok) return c.json(speciesResult.error, 400);
+  const species = speciesResult.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     if (species) {

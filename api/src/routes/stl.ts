@@ -21,13 +21,21 @@ import {
   type ConnectivityQuality,
   type PacketQueueStats,
 } from "../services/stl";
+import { fitsJsonByteLimit } from "../lib/json-size";
+
+const maxPacketPayloadBytes = 64 * 1024;
+const maxPacketSourceEventIds = 100;
+const maxAckPacketIds = 250;
 
 const packetCreateSchema = z.object({
   packet_id: z.string().min(3),
   trip_id: z.string().optional(),
   event_type: z.string().min(1),
-  payload_json: z.record(z.unknown()),
-  source_event_ids: z.array(z.string()).min(1),
+  payload_json: z.record(z.unknown()).refine(
+    fitsJsonByteLimit(maxPacketPayloadBytes),
+    `payload_json must be ${maxPacketPayloadBytes} bytes or less`
+  ),
+  source_event_ids: z.array(z.string()).min(1).max(maxPacketSourceEventIds),
   lossless_ref: z.string().min(1),
   ts_device: z.string().datetime()
 });
@@ -39,7 +47,7 @@ const connectivityReportSchema = z.object({
 });
 
 const packetAckSchema = z.object({
-  packet_ids: z.array(z.string()).min(1)
+  packet_ids: z.array(z.string()).min(1).max(maxAckPacketIds)
 });
 
 export const stlRouter = new Hono<{

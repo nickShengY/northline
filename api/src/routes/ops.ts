@@ -1,41 +1,77 @@
 import { Hono } from "hono";
 import { replay, type OpsEvent } from "@northline/shared";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { eventsSinceCursor } from "../lib/events";
 import { runComplianceValidation } from "../services/compliance";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
+import { writeAuditLog } from "../lib/audit";
+import { parseBoundedIntegerQueryParam, validateOptionalQueryParam } from "../lib/route-params";
 
-export const opsRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
+export const opsRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 opsRouter.get("/dashboard", async (c) => {
   const auth = c.get("auth");
-  const events = await eventsSinceCursor(c.env, auth.tenantId, undefined, 5000);
-  const projected = replay(events as OpsEvent[]);
+  const [tripSummary, offshoreGearSummary, iceGearSummary, hazardSummary] = await withTenant(c.env, auth.tenantId, async (sql) => {
+    const trips = await sql`
+      select
+        count(*) filter (where status = 'ACTIVE')::int as active_trips,
+        coalesce(sum(compliance_open_issues), 0)::int as compliance_issues_open,
+        count(*) filter (where compliance_open_issues = 0)::int as compliance_signed,
+        count(*) filter (where compliance_open_issues > 0)::int as compliance_pending,
+        count(*) filter (where latest_risk_tier = 'LOW')::int as low_risk,
+        count(*) filter (where latest_risk_tier = 'MODERATE')::int as moderate_risk,
+        count(*) filter (where latest_risk_tier = 'HIGH')::int as high_risk,
+        count(*) filter (where latest_risk_tier = 'CRITICAL')::int as critical_risk
+      from trip_state
+      where tenant_id = ${auth.tenantId}
+    `;
 
-  const activeTrips = Object.values(projected.trips).filter((trip) => trip.status === "ACTIVE").length;
-  const missingGear = Object.values(projected.gear).filter((gear) => gear.status === "MISSING").length;
-  const totalGear = Object.keys(projected.gear).length;
+    const offshoreGear = await sql`
+      select
+        count(*)::int as total_gear,
+        count(*) filter (where status = 'MISSING')::int as missing_gear
+      from gear_state_offshore
+      where tenant_id = ${auth.tenantId}
+    `;
 
-  // Calculate risk distribution
-  const riskTiers = { LOW: 0, MODERATE: 0, HIGH: 0, CRITICAL: 0 };
-  Object.values(projected.trips).forEach((trip) => {
-    const tier = trip.latest_risk_tier as keyof typeof riskTiers;
-    if (tier in riskTiers) riskTiers[tier]++;
+    const iceGear = await sql`
+      select
+        count(*)::int as total_gear,
+        count(*) filter (where status = 'MISSING')::int as missing_gear
+      from gear_state_ice
+      where tenant_id = ${auth.tenantId}
+    `;
+
+    const hazards = await sql`
+      select count(*)::int as hazard_count
+      from hazard_layer_state
+      where tenant_id = ${auth.tenantId}
+    `;
+
+    return [trips[0] ?? {}, offshoreGear[0] ?? {}, iceGear[0] ?? {}, hazards[0] ?? {}];
   });
 
-  // Calculate compliance metrics
-  const complianceSigned = Object.values(projected.trips).filter((trip) => trip.compliance_open_issues === 0).length;
-  const compliancePending = Object.values(projected.trips).filter((trip) => trip.compliance_open_issues > 0).length;
+  const totalGear = Number(offshoreGearSummary.total_gear ?? 0) + Number(iceGearSummary.total_gear ?? 0);
+  const missingGear = Number(offshoreGearSummary.missing_gear ?? 0) + Number(iceGearSummary.missing_gear ?? 0);
 
   return c.json({
-    active_trips: activeTrips,
+    active_trips: Number(tripSummary.active_trips ?? 0),
     missing_gear: missingGear,
     total_gear: totalGear,
-    compliance_issues_open: Object.values(projected.trips).reduce((acc, trip) => acc + trip.compliance_open_issues, 0),
-    hazard_count: Object.keys(projected.hazards).length,
-    risk_distribution: riskTiers,
-    compliance_status: { signed: complianceSigned, pending: compliancePending },
+    compliance_issues_open: Number(tripSummary.compliance_issues_open ?? 0),
+    hazard_count: Number(hazardSummary.hazard_count ?? 0),
+    risk_distribution: {
+      LOW: Number(tripSummary.low_risk ?? 0),
+      MODERATE: Number(tripSummary.moderate_risk ?? 0),
+      HIGH: Number(tripSummary.high_risk ?? 0),
+      CRITICAL: Number(tripSummary.critical_risk ?? 0)
+    },
+    compliance_status: {
+      signed: Number(tripSummary.compliance_signed ?? 0),
+      pending: Number(tripSummary.compliance_pending ?? 0)
+    },
     gear_health_score: totalGear > 0 ? Math.round(((totalGear - missingGear) / totalGear) * 100) : 100,
     last_updated: new Date().toISOString()
   });
@@ -74,7 +110,7 @@ opsRouter.get("/trip/:tripId/compliance/summary", async (c) => {
   return c.json({ trip_id: tripId, compliance });
 });
 
-opsRouter.post("/trip/:tripId/compliance/sign", async (c) => {
+opsRouter.post("/trip/:tripId/compliance/sign", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
   const body = await c.req.json().catch(() => ({}));
@@ -135,6 +171,21 @@ opsRouter.post("/trip/:tripId/compliance/sign", async (c) => {
     }
   });
 
+  await writeAuditLog(c.env, {
+    auth,
+    action: "compliance.sign",
+    subjectType: "TRIP",
+    subjectId: tripId,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      pkg_id: pkgId,
+      completion_meter: compliance.completion_meter,
+      errors: compliance.errors.length,
+      warnings: compliance.warnings.length
+    }
+  });
+
   return c.json({
     ok: true,
     pkg_id: pkgId,
@@ -147,8 +198,13 @@ opsRouter.post("/trip/:tripId/compliance/sign", async (c) => {
 opsRouter.get("/trip/:tripId/timeline", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const limitParam = Number(c.req.query("limit") ?? "500");
-  const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(5000, limitParam) : 500;
+  const limitResult = parseBoundedIntegerQueryParam("limit", c.req.query("limit"), {
+    defaultValue: 500,
+    min: 1,
+    max: 5000
+  });
+  if (!limitResult.ok) return c.json(limitResult.error, 400);
+  const limit = limitResult.value;
 
   const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, Math.max(limit * 2, 1000))) as OpsEvent[];
   const timeline = events
@@ -164,8 +220,12 @@ opsRouter.get("/trip/:tripId/timeline", async (c) => {
 
 opsRouter.get("/trips", async (c) => {
   const auth = c.get("auth");
-  const status = c.req.query("status");
-  const mode = c.req.query("mode");
+  const statusResult = validateOptionalQueryParam("status", c.req.query("status"));
+  const modeResult = validateOptionalQueryParam("mode", c.req.query("mode"));
+  if (!statusResult.ok) return c.json(statusResult.error, 400);
+  if (!modeResult.ok) return c.json(modeResult.error, 400);
+  const status = statusResult.value;
+  const mode = modeResult.value;
 
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
@@ -183,7 +243,7 @@ opsRouter.get("/trips", async (c) => {
   return c.json({ trips: rows.map((row) => ({ ...row })) });
 });
 
-opsRouter.post("/trip/:tripId/rebuild", async (c) => {
+opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
 
@@ -281,6 +341,20 @@ opsRouter.post("/trip/:tripId/rebuild", async (c) => {
           signed_at = excluded.signed_at,
           updated_at = now()
     `;
+  });
+
+  await writeAuditLog(c.env, {
+    auth,
+    action: "ops.trip_rebuild",
+    subjectType: "TRIP",
+    subjectId: tripId,
+    outcome: "SUCCESS",
+    requestId: c.req.header("x-request-id"),
+    metadata: {
+      event_count: tripEvents.length,
+      gear_rows: tripGear.length,
+      compliance_meter: compliance.completion_meter
+    }
   });
 
   return c.json({

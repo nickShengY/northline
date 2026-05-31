@@ -132,6 +132,12 @@ export function VesselOpsApp() {
     readJsonStorage<{ id: string; message: string; tone: string; createdAt: string }[]>(STORAGE_KEY_ACTIVITY, [])
   );
   const [riskScore, setRiskScore] = useState<{ tier: RiskTier; score: number }>({ tier: "LOW", score: 0 });
+  const [watchChecklist, setWatchChecklist] = useState({
+    comms: false,
+    deck: false,
+    weather: false,
+    gear: false
+  });
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -348,6 +354,30 @@ export function VesselOpsApp() {
     ERROR: "error"
   };
 
+  const openCriticalEvents = safetyEvents.filter((event) => !event.acknowledged && (event.severity === "critical" || event.severity === "high")).length;
+  const missingGearCount = gearItems.filter((gear) => gear.status === "MISSING").length;
+  const watchReady = watchChecklist.comms && watchChecklist.deck && watchChecklist.weather && watchChecklist.gear;
+  const bridgePlaybook = [
+    {
+      label: riskScore.tier === "HIGH" || riskScore.tier === "CRITICAL" ? "Hold haul decision" : "Haul decision clear",
+      detail:
+        riskScore.tier === "HIGH" || riskScore.tier === "CRITICAL"
+          ? "Run mitigation review before changing vessel or gear state."
+          : "Current loaded risk score does not block routine gear work.",
+      tone: riskScore.tier === "HIGH" || riskScore.tier === "CRITICAL" ? "danger" : "success"
+    },
+    {
+      label: missingGearCount ? "Gear exception review" : "Gear state normal",
+      detail: missingGearCount ? `${missingGearCount} missing gear item ${missingGearCount === 1 ? "needs" : "need"} assignment.` : "No missing gear in the loaded trip snapshot.",
+      tone: missingGearCount ? "warning" : "success"
+    },
+    {
+      label: openCriticalEvents ? "Safety acknowledgement" : "Safety events acknowledged",
+      detail: openCriticalEvents ? `${openCriticalEvents} high-priority event ${openCriticalEvents === 1 ? "is" : "are"} awaiting acknowledgement.` : "No loaded critical events require acknowledgement.",
+      tone: openCriticalEvents ? "danger" : "success"
+    }
+  ];
+
   return (
     <AppShell maxWidth="full">
       {mobAlertActive && (
@@ -413,6 +443,68 @@ export function VesselOpsApp() {
             All Hands Check
           </Button>
         </div>
+      </Section>
+
+      <Section title="Bridge Decision Support">
+        <Grid cols={2} gap="md">
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle>Operating Playbook</CardTitle>
+              <CardDescription>Risk, gear, and incident signals translated into deck actions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Stack gap="sm">
+                {bridgePlaybook.map((item) => (
+                  <div key={item.label} className="flex items-start justify-between gap-3 p-3 rounded bg-[var(--bg-secondary)]">
+                    <div>
+                      <p className="font-semibold">{item.label}</p>
+                      <p className="text-sm text-[var(--ink-muted)]">{item.detail}</p>
+                    </div>
+                    <StatusBadge status={item.tone === "danger" ? "error" : item.tone === "warning" ? "pending" : "synced"} size="sm">
+                      {item.tone}
+                    </StatusBadge>
+                  </div>
+                ))}
+              </Stack>
+            </CardContent>
+          </Card>
+
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle>Watch Handoff</CardTitle>
+              <CardDescription>Critical checks before bridge responsibility changes</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Stack gap="sm">
+                {[
+                  ["comms", "Comms check complete"],
+                  ["deck", "Deck crew accounted for"],
+                  ["weather", "Weather window reviewed"],
+                  ["gear", "Gear exceptions assigned"]
+                ].map(([id, label]) => (
+                  <label key={id} className="flex items-center justify-between gap-3 p-3 rounded bg-[var(--bg-secondary)] cursor-pointer">
+                    <span className="text-sm">{label}</span>
+                    <input
+                      type="checkbox"
+                      checked={watchChecklist[id as keyof typeof watchChecklist]}
+                      onChange={(event) => setWatchChecklist((current) => ({ ...current, [id]: event.target.checked }))}
+                    />
+                  </label>
+                ))}
+              </Stack>
+              <div className="flex items-center justify-between mt-4">
+                <StatusBadge status={watchReady ? "synced" : "pending"}>{watchReady ? "Ready" : "Incomplete"}</StatusBadge>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => addActivity(watchReady ? "Watch handoff completed." : "Watch handoff reviewed with incomplete checks.", watchReady ? "success" : "warning")}
+                >
+                  Log Handoff
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </Grid>
       </Section>
 
       <Section>
