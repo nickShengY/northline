@@ -50,7 +50,7 @@ const certificateRequestSchema = z.object({
 
 export const traceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
-traceRouter.post("/lot/create", async (c) => {
+traceRouter.post("/lot/create", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = lotCreateSchema.safeParse(body);
@@ -67,7 +67,7 @@ traceRouter.post("/lot/create", async (c) => {
         ${parsed.data.lot_id}, ${auth.tenantId}, ${parsed.data.trip_id}, ${parsed.data.mode},
         ${JSON.stringify(parsed.data.species_totals)}::jsonb, ${JSON.stringify(parsed.data.quality_json)}::jsonb
       )
-      on conflict (lot_id) do update
+      on conflict (tenant_id, lot_id) do update
       set trip_id = excluded.trip_id,
           mode = excluded.mode,
           totals_json = excluded.totals_json,
@@ -92,7 +92,7 @@ traceRouter.post("/lot/create", async (c) => {
   return c.json({ ok: true, lot_id: parsed.data.lot_id, emitted_event_id: emitted.event_id });
 });
 
-traceRouter.post("/lot/scan-attach", async (c) => {
+traceRouter.post("/lot/scan-attach", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = lotScanAttachSchema.safeParse(body);
@@ -143,7 +143,7 @@ traceRouter.post("/lot/scan-attach", async (c) => {
         ${JSON.stringify(parsed.data.species_totals)}::jsonb,
         ${mismatch.mismatch_rate}, ${Math.round(mismatch.expected_total)}, ${Math.round(mismatch.observed_total)}, ${mismatch.requires_review}
       )
-      on conflict (batch_id) do update
+      on conflict (tenant_id, batch_id) do update
       set source = excluded.source,
           species_totals = excluded.species_totals,
           mismatch_rate = excluded.mismatch_rate,
@@ -273,7 +273,7 @@ traceRouter.post("/certificate/issue", requireRole("ORG_ADMIN", "OWNER", "CAPTAI
         ${certificate.hash}, ${key}, ${auth.actorId}, ${certificate.issued_at}::timestamptz,
         ${JSON.stringify(parsed.data.event_ids)}::jsonb
       )
-      on conflict (certificate_id) do nothing
+      on conflict (tenant_id, certificate_id) do nothing
     `;
 
     await sql`
@@ -289,7 +289,7 @@ traceRouter.post("/certificate/issue", requireRole("ORG_ADMIN", "OWNER", "CAPTAI
           issued_at: certificate.issued_at
         })}::jsonb
       )
-      on conflict (artifact_id) do update
+      on conflict (tenant_id, artifact_id) do update
       set object_key = excluded.object_key,
           content_hash = excluded.content_hash,
           provenance_event_ids = excluded.provenance_event_ids,

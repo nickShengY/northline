@@ -44,7 +44,7 @@ export async function projectAcceptedEvent(sql: SqlQuery, tenantId: string, even
           ${tripId}, ${tenantId}, ${modeFromPayload(payload)}, ${String(payload.owner_id ?? event.actor_id)},
           ${"PLANNED"}, ${payload.location_name ? String(payload.location_name) : null}, 0, 0, ${"LOW"}, now()
         )
-        on conflict (trip_id) do update
+        on conflict (tenant_id, trip_id) do update
         set mode = excluded.mode,
             owner_id = excluded.owner_id,
             status = excluded.status,
@@ -117,7 +117,7 @@ export async function projectAcceptedEvent(sql: SqlQuery, tenantId: string, even
         await sql`
           insert into gear_state_ice (gear_id, tenant_id, trip_id, status, last_position, updated_at)
           values (${gearId}, ${tenantId}, ${tripId}, ${status}, ${position}::jsonb, now())
-          on conflict (gear_id) do update
+          on conflict (tenant_id, gear_id) do update
           set trip_id = excluded.trip_id,
               status = excluded.status,
               last_position = coalesce(excluded.last_position, gear_state_ice.last_position),
@@ -127,7 +127,7 @@ export async function projectAcceptedEvent(sql: SqlQuery, tenantId: string, even
         await sql`
           insert into gear_state_offshore (gear_id, tenant_id, trip_id, status, last_position, updated_at)
           values (${gearId}, ${tenantId}, ${tripId}, ${status}, ${position}::jsonb, now())
-          on conflict (gear_id) do update
+          on conflict (tenant_id, gear_id) do update
           set trip_id = excluded.trip_id,
               status = excluded.status,
               last_position = coalesce(excluded.last_position, gear_state_offshore.last_position),
@@ -149,7 +149,7 @@ export async function projectAcceptedEvent(sql: SqlQuery, tenantId: string, even
           ${Number(payload.severity ?? 1)}, ${Number(payload.confidence ?? 0.5)},
           ${location}::jsonb, ${String(payload.sharing_scope ?? "ORG")}, ${event.actor_id}, now()
         )
-        on conflict (hazard_id) do update
+        on conflict (tenant_id, hazard_id) do update
         set severity = excluded.severity,
             confidence = excluded.confidence,
             location = excluded.location,

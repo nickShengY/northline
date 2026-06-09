@@ -49,7 +49,7 @@ const returnPlanSchema = z.object({
 export const iceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 // Ice thickness logging
-iceRouter.post("/thickness", async (c) => {
+iceRouter.post("/thickness", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = iceThicknessSchema.safeParse(body);
@@ -137,7 +137,7 @@ iceRouter.get("/thickness/:tripId/latest", async (c) => {
 });
 
 // Route point logging
-iceRouter.post("/route-point", async (c) => {
+iceRouter.post("/route-point", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = routePointSchema.safeParse(body);
@@ -155,7 +155,7 @@ iceRouter.post("/route-point", async (c) => {
         ${parsed.data.point_type}, ${JSON.stringify(parsed.data.location)}::jsonb,
         ${parsed.data.notes ?? null}, ${auth.actorId}
       )
-      on conflict (point_id) do update
+      on conflict (tenant_id, point_id) do update
       set sequence = excluded.sequence,
           point_type = excluded.point_type,
           location = excluded.location,
@@ -231,7 +231,7 @@ iceRouter.delete("/route-point/:pointId", requireRole("ORG_ADMIN", "OWNER", "CAP
 });
 
 // Return plan management
-iceRouter.post("/return-plan", async (c) => {
+iceRouter.post("/return-plan", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = returnPlanSchema.safeParse(body);
@@ -250,7 +250,7 @@ iceRouter.post("/return-plan", async (c) => {
         ${parsed.data.route_summary ? JSON.stringify(parsed.data.route_summary) : null}::jsonb,
         ${JSON.stringify(parsed.data.escalation_contacts)}::jsonb, ${"SET"}, ${auth.actorId}
       )
-      on conflict (plan_id) do update
+      on conflict (tenant_id, plan_id) do update
       set return_by = excluded.return_by,
           access_point = excluded.access_point,
           route_summary = excluded.route_summary,

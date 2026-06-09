@@ -77,7 +77,7 @@ safetyRouter.post("/risk/score", async (c) => {
   return c.json(result);
 });
 
-safetyRouter.post("/incident", async (c) => {
+safetyRouter.post("/incident", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = incidentSchema.safeParse(body);
@@ -93,7 +93,7 @@ safetyRouter.post("/incident", async (c) => {
         ${parsed.data.case_id}, ${auth.tenantId}, ${parsed.data.trip_id}, ${parsed.data.category}, ${parsed.data.severity},
         ${"OPEN"}, ${parsed.data.summary}, ${parsed.data.action_taken ?? null}, ${auth.actorId}, now()
       )
-      on conflict (case_id) do update
+      on conflict (tenant_id, case_id) do update
       set category = excluded.category,
           severity = excluded.severity,
           summary = excluded.summary,
@@ -164,7 +164,7 @@ safetyRouter.get("/incidents/open", async (c) => {
   return c.json({ incidents: rows.map((row) => ({ ...row })) });
 });
 
-safetyRouter.post("/hazard/report", async (c) => {
+safetyRouter.post("/hazard/report", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = hazardSchema.safeParse(body);
@@ -181,7 +181,7 @@ safetyRouter.post("/hazard/report", async (c) => {
         ${parsed.data.hazard_id}, ${auth.tenantId}, ${parsed.data.hazard_type}, ${parsed.data.severity}, ${parsed.data.confidence},
         ${JSON.stringify(parsed.data.location)}::jsonb, ${parsed.data.sharing_scope}, ${auth.actorId}, now()
       )
-      on conflict (hazard_id) do update
+      on conflict (tenant_id, hazard_id) do update
       set severity = excluded.severity,
           confidence = excluded.confidence,
           location = excluded.location,
@@ -201,7 +201,7 @@ safetyRouter.post("/hazard/report", async (c) => {
   return c.json({ ok: true, hazard_id: parsed.data.hazard_id, emitted_event_id: emitted.event_id });
 });
 
-safetyRouter.post("/hazard/:hazardId/confirm", async (c) => {
+safetyRouter.post("/hazard/:hazardId/confirm", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const hazardId = c.req.param("hazardId");
 
@@ -265,7 +265,7 @@ safetyRouter.get("/hazards", async (c) => {
   return c.json({ hazards: rows });
 });
 
-safetyRouter.post("/checkin/schedule", async (c) => {
+safetyRouter.post("/checkin/schedule", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = checkinScheduleSchema.safeParse(body);
@@ -282,8 +282,9 @@ safetyRouter.post("/checkin/schedule", async (c) => {
         ${parsed.data.checkin_id}, ${auth.tenantId}, ${parsed.data.trip_id}, ${parsed.data.due_at}::timestamptz,
         ${"SCHEDULED"}, ${JSON.stringify(parsed.data.location ?? null)}::jsonb, now()
       )
-      on conflict (checkin_id) do update
+      on conflict (tenant_id, checkin_id) do update
       set due_at = excluded.due_at,
+          trip_id = excluded.trip_id,
           status = excluded.status,
           location_json = excluded.location_json,
           updated_at = now()
@@ -307,7 +308,7 @@ safetyRouter.post("/checkin/schedule", async (c) => {
   return c.json({ ok: true, checkin_id: parsed.data.checkin_id, emitted_event_id: emitted.event_id });
 });
 
-safetyRouter.post("/checkin/complete", async (c) => {
+safetyRouter.post("/checkin/complete", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = checkinStatusSchema.safeParse(body);
@@ -323,7 +324,9 @@ safetyRouter.post("/checkin/complete", async (c) => {
           completed_at = now(),
           location_json = ${JSON.stringify(parsed.data.location ?? null)}::jsonb,
           updated_at = now()
-      where tenant_id = ${auth.tenantId} and checkin_id = ${parsed.data.checkin_id}
+      where tenant_id = ${auth.tenantId}
+        and checkin_id = ${parsed.data.checkin_id}
+        and trip_id = ${parsed.data.trip_id}
       returning checkin_id, trip_id
     `;
   });
@@ -332,12 +335,12 @@ safetyRouter.post("/checkin/complete", async (c) => {
 
   const emitted = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "GROUP",
-    subject_id: parsed.data.trip_id,
+    subject_id: String(rows[0].trip_id),
     actor_id: auth.actorId,
     event_type: "CHECKIN_COMPLETED",
     payload_json: {
       checkin_id: parsed.data.checkin_id,
-      trip_id: parsed.data.trip_id,
+      trip_id: String(rows[0].trip_id),
       status: "COMPLETED",
       location: parsed.data.location
     }
@@ -346,7 +349,7 @@ safetyRouter.post("/checkin/complete", async (c) => {
   return c.json({ ok: true, checkin_id: parsed.data.checkin_id, emitted_event_id: emitted.event_id });
 });
 
-safetyRouter.post("/checkin/missed", async (c) => {
+safetyRouter.post("/checkin/missed", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = checkinStatusSchema.safeParse(body);
@@ -355,23 +358,28 @@ safetyRouter.post("/checkin/missed", async (c) => {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
-  await withTenant(c.env, auth.tenantId, async (sql) => {
-    await sql`
+  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+    return sql`
       update checkin_state
       set status = 'MISSED',
           updated_at = now()
-      where tenant_id = ${auth.tenantId} and checkin_id = ${parsed.data.checkin_id}
+      where tenant_id = ${auth.tenantId}
+        and checkin_id = ${parsed.data.checkin_id}
+        and trip_id = ${parsed.data.trip_id}
+      returning checkin_id, trip_id
     `;
   });
 
+  if (!rows.length) return c.json({ ok: false, reason: "checkin_not_found" }, 404);
+
   const missed = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "GROUP",
-    subject_id: parsed.data.trip_id,
+    subject_id: String(rows[0].trip_id),
     actor_id: auth.actorId,
     event_type: "CHECKIN_MISSED",
     payload_json: {
       checkin_id: parsed.data.checkin_id,
-      trip_id: parsed.data.trip_id,
+      trip_id: String(rows[0].trip_id),
       status: "MISSED",
       location: parsed.data.location
     }
@@ -379,12 +387,12 @@ safetyRouter.post("/checkin/missed", async (c) => {
 
   const escalated = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "GROUP",
-    subject_id: parsed.data.trip_id,
+    subject_id: String(rows[0].trip_id),
     actor_id: auth.actorId,
     event_type: "CHECKIN_ESCALATED",
     payload_json: {
       checkin_id: parsed.data.checkin_id,
-      trip_id: parsed.data.trip_id,
+      trip_id: String(rows[0].trip_id),
       status: "ESCALATED",
       location: parsed.data.location
     }

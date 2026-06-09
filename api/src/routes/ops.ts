@@ -132,7 +132,7 @@ opsRouter.post("/trip/:tripId/compliance/sign", requireRole("ORG_ADMIN", "OWNER"
         ${compliance.errors.length > 0 ? "NEEDS_ATTENTION" : "SIGNED"},
         ${JSON.stringify(compliance)}::jsonb, ${auth.actorId}, now(), now()
       )
-      on conflict (pkg_id) do update
+      on conflict (tenant_id, pkg_id) do update
       set completion_meter = excluded.completion_meter,
           open_errors = excluded.open_errors,
           warnings = excluded.warnings,
@@ -277,7 +277,7 @@ opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTA
         ${trip.started_at ?? null}::timestamptz, ${trip.ended_at ?? null}::timestamptz, ${trip.location_name ?? null},
         ${compliance.completion_meter}, ${compliance.errors.length}, ${trip.latest_risk_tier}, now()
       )
-      on conflict (trip_id) do update
+      on conflict (tenant_id, trip_id) do update
       set mode = excluded.mode,
           owner_id = excluded.owner_id,
           status = excluded.status,
@@ -301,7 +301,7 @@ opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTA
           ) values (
             ${gear.gear_id}, ${auth.tenantId}, ${tripId}, ${gear.status}, ${JSON.stringify(gear.last_position ?? null)}::jsonb, now()
           )
-          on conflict (gear_id) do update
+          on conflict (tenant_id, gear_id) do update
           set trip_id = excluded.trip_id,
               status = excluded.status,
               last_position = excluded.last_position,
@@ -314,7 +314,7 @@ opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTA
           ) values (
             ${gear.gear_id}, ${auth.tenantId}, ${tripId}, ${gear.status}, ${JSON.stringify(gear.last_position ?? null)}::jsonb, now()
           )
-          on conflict (gear_id) do update
+          on conflict (tenant_id, gear_id) do update
           set trip_id = excluded.trip_id,
               status = excluded.status,
               last_position = excluded.last_position,
@@ -331,7 +331,7 @@ opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTA
         ${compliance.errors.length > 0 ? "NEEDS_ATTENTION" : "DRAFT"}, ${JSON.stringify(compliance)}::jsonb,
         ${auth.actorId}, now(), now()
       )
-      on conflict (pkg_id) do update
+      on conflict (tenant_id, pkg_id) do update
       set completion_meter = excluded.completion_meter,
           open_errors = excluded.open_errors,
           warnings = excluded.warnings,

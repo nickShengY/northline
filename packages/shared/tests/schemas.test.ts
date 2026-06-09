@@ -56,4 +56,12 @@ describe("event payload schemas", () => {
       quality_json: { payload: "x".repeat(17 * 1024) }
     }).ok).toBe(false);
   });
+
+  it("rejects unknown event types instead of accepting unvalidated payloads", () => {
+    const result = validatePayload("NOT_A_REAL_EVENT", {
+      arbitrary: true
+    });
+
+    expect(result.ok).toBe(false);
+  });
 });

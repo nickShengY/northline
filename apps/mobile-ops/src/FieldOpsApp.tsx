@@ -236,7 +236,7 @@ export function FieldOpsApp() {
   const [gearId, setGearId] = useState("STR-021");
   const [transition, setTransition] = useState<Transition>("CHECKED");
   const [checkinDone, setCheckinDone] = useState(false);
-  const [checkinId] = useState(() => `chk_${crypto.randomUUID().slice(0, 8)}`);
+  const [checkinId, setCheckinId] = useState(() => `chk_${crypto.randomUUID().slice(0, 8)}`);
   const [risk, setRisk] = useState<RiskScoreResult | null>(null);
   const [training, setTraining] = useState<TrainingRecommendation[]>([]);
   const [hazards, setHazards] = useState<HazardRow[]>([]);
@@ -500,18 +500,20 @@ export function FieldOpsApp() {
     }
     await runWithSync(
       async () => {
+        const nextCheckinId = `chk_${crypto.randomUUID().slice(0, 8)}`;
         await scheduleCheckin({
-          checkin_id: checkinId,
+          checkin_id: nextCheckinId,
           trip_id: tripId,
           due_at: new Date(Date.now() + 20 * 60 * 1000).toISOString()
         });
+        setCheckinId(nextCheckinId);
+        setCheckinDone(false);
       },
       {
-        pendingOnError: true,
         successMessage: "Check-in scheduled for the next 20-minute window.",
         successActivity: "Scheduled operator check-in.",
-        errorMessage: "Check-in was queued locally. Sync when online.",
-        errorActivity: "Check-in scheduling queued offline."
+        errorMessage: "Check-in schedule failed. Try again when signal improves.",
+        errorActivity: "Check-in scheduling failed."
       }
     );
   }
@@ -599,11 +601,10 @@ export function FieldOpsApp() {
         await loadHazards();
       },
       {
-        pendingOnError: true,
         successMessage: "Hazard submitted and feed updated.",
         successActivity: severity >= 5 ? "Emergency hazard report sent." : "Hazard report submitted.",
-        errorMessage: "Hazard was captured. It will sync when connection returns.",
-        errorActivity: "Hazard captured for deferred sync."
+        errorMessage: "Hazard report failed. Try again when signal improves.",
+        errorActivity: "Hazard report failed."
       }
     );
   }
@@ -626,11 +627,10 @@ export function FieldOpsApp() {
         await loadGear();
       },
       {
-        pendingOnError: true,
         successMessage: `Gear ${gearId} updated to ${transition}.`,
         successActivity: `Gear ${gearId} transitioned to ${transition}.`,
-        errorMessage: "Transition queued locally. Sync pending.",
-        errorActivity: "Gear transition queued for sync."
+        errorMessage: "Gear transition failed. Try again when signal improves.",
+        errorActivity: "Gear transition failed."
       }
     );
   }

@@ -393,7 +393,7 @@ syncRouter.post("/device/register", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN")
         ${parsed.data.device_id}, ${auth.tenantId}, ${parsed.data.subject_type}, ${parsed.data.subject_id},
         ${parsed.data.public_key}, ${parsed.data.key_version}, false, now()
       )
-      on conflict (device_id) do update
+      on conflict (tenant_id, device_id) do update
       set subject_type = excluded.subject_type,
           subject_id = excluded.subject_id,
           public_key = excluded.public_key,
@@ -454,7 +454,7 @@ syncRouter.post("/device/register-self", async (c) => {
         ${registration.device_id}, ${auth.tenantId}, ${registration.subject_type}, ${registration.subject_id},
         ${registration.public_key}, ${registration.key_version}, false, now()
       )
-      on conflict (device_id) do update
+      on conflict (tenant_id, device_id) do update
       set subject_type = excluded.subject_type,
           subject_id = excluded.subject_id,
           public_key = excluded.public_key,

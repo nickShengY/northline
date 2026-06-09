@@ -145,7 +145,7 @@ export async function rebuildTripState(
           ${tripState.completion_meter as number}, ${tripState.compliance_open_issues as number},
           ${tripState.latest_risk_tier as string}, now()
         )
-        on conflict (trip_id) do update
+        on conflict (tenant_id, trip_id) do update
         set mode = excluded.mode,
             owner_id = excluded.owner_id,
             status = excluded.status,
@@ -282,7 +282,7 @@ export async function rebuildGearStateOffshore(
           ${state.last_position ? JSON.stringify(state.last_position) : null}::jsonb,
           now()
         )
-        on conflict (gear_id) do update
+        on conflict (tenant_id, gear_id) do update
         set status = excluded.status,
             buoy_label = excluded.buoy_label,
             pot_count = excluded.pot_count,

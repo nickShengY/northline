@@ -23,7 +23,8 @@ describe("database migration invariants", () => {
       "0005_complete_schema.sql",
       "0006_stl_packet_queue.sql",
       "0007_enterprise_hardening.sql",
-      "0008_sync_cursor_ack.sql"
+      "0008_sync_cursor_ack.sql",
+      "0009_tenant_composite_keys.sql"
     ]);
   });
 
@@ -60,6 +61,15 @@ describe("database migration invariants", () => {
     expect(sql).toContain("call enable_rls_with_policy('sync_cursor_ack')");
     expect(sql).toContain("idx_sync_cursor_ack_actor_time");
     expect(sql).toContain("idx_sync_cursor_ack_device_time");
+  });
+
+  it("scopes tenant-owned natural IDs by tenant", () => {
+    const sql = migration("0009_tenant_composite_keys.sql");
+
+    expect(sql).toContain("primary key (tenant_id, trip_id)");
+    expect(sql).toContain("primary key (tenant_id, gear_id)");
+    expect(sql).toContain("primary key (tenant_id, device_id)");
+    expect(sql).toContain("primary key (tenant_id, checkin_id)");
   });
 
   it("keeps the live Postgres integration gate aligned with every migration file", () => {

@@ -70,7 +70,7 @@ trainingRouter.post("/assign", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), asy
         ${assignId}, ${auth.tenantId}, ${parsed.data.user_id}, ${parsed.data.module_id},
         ${parsed.data.reason}, ${parsed.data.status}, ${parsed.data.due_at ?? null}::timestamptz
       )
-      on conflict (assign_id) do update
+      on conflict (tenant_id, assign_id) do update
       set user_id = excluded.user_id,
           module_id = excluded.module_id,
           reason = excluded.reason,

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Env } from "../types";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
+import { requireRole } from "../lib/rbac";
 import { validateOptionalQueryParam } from "../lib/route-params";
 
 const transitionSchema = z.object({
@@ -45,7 +46,7 @@ const dbStatusByTransition = {
 
 export const gearRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantId: string; actorId: string } } }>();
 
-gearRouter.post("/transition", async (c) => {
+gearRouter.post("/transition", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = transitionSchema.safeParse(body);
@@ -64,7 +65,7 @@ gearRouter.post("/transition", async (c) => {
         ) values (
           ${gear_id}, ${auth.tenantId}, ${trip_id}, ${dbStatusByTransition[transition]}, ${position ? JSON.stringify(position) : null}::jsonb
         )
-        on conflict (gear_id) do update
+        on conflict (tenant_id, gear_id) do update
         set trip_id = excluded.trip_id,
             status = excluded.status,
             last_position = coalesce(excluded.last_position, gear_state_offshore.last_position),
@@ -77,7 +78,7 @@ gearRouter.post("/transition", async (c) => {
         ) values (
           ${gear_id}, ${auth.tenantId}, ${trip_id}, ${dbStatusByTransition[transition]}, ${position ? JSON.stringify(position) : null}::jsonb
         )
-        on conflict (gear_id) do update
+        on conflict (tenant_id, gear_id) do update
         set trip_id = excluded.trip_id,
             status = excluded.status,
             last_position = coalesce(excluded.last_position, gear_state_ice.last_position),
@@ -103,7 +104,7 @@ gearRouter.post("/transition", async (c) => {
   return c.json({ ok: true, gear_id, trip_id, transition, emitted_event_id: emitted.event_id });
 });
 
-gearRouter.post("/sweep-check", async (c) => {
+gearRouter.post("/sweep-check", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = sweepSchema.safeParse(body);

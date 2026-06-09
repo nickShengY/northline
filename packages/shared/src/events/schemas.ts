@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { eventTypes } from "./types";
 
+const knownEventTypes = new Set<string>(eventTypes);
+
 function jsonByteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).length;
 }
@@ -180,10 +182,10 @@ export const envelopeSchema = z.object({
 
 export function validatePayload(eventType: string, payload: unknown) {
   const schema = (schemaByEventType as Record<string, z.ZodTypeAny>)[eventType];
-  if (!schema) {
-    return { ok: true as const, data: payload };
+  if (!schema && !knownEventTypes.has(eventType)) {
+    return { ok: false as const, error: { formErrors: [`Unknown event type: ${eventType}`], fieldErrors: {} } };
   }
-  const parsed = schema.safeParse(payload);
+  const parsed = (schema ?? z.record(z.unknown())).safeParse(payload);
   if (!parsed.success) {
     return { ok: false as const, error: parsed.error.flatten() };
   }

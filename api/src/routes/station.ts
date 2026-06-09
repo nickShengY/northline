@@ -48,7 +48,7 @@ const tipupTransitionSchema = z.object({
 
 export const stationRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
-stationRouter.post("/create", async (c) => {
+stationRouter.post("/create", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = stationCreateSchema.safeParse(body);
@@ -66,7 +66,7 @@ stationRouter.post("/create", async (c) => {
         ${parsed.data.hole_count}, ${parsed.data.tipup_count},
         ${JSON.stringify(parsed.data.location)}::jsonb, ${parsed.data.notes ?? null}, ${auth.actorId}
       )
-      on conflict (station_id) do update
+      on conflict (tenant_id, station_id) do update
       set name = excluded.name,
           hole_count = excluded.hole_count,
           tipup_count = excluded.tipup_count,
@@ -94,7 +94,7 @@ stationRouter.post("/create", async (c) => {
   return c.json({ ok: true, station_id: parsed.data.station_id, emitted_event_id: emitted.event_id });
 });
 
-stationRouter.post("/update", async (c) => {
+stationRouter.post("/update", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = stationUpdateSchema.safeParse(body);
@@ -206,7 +206,7 @@ stationRouter.get("/trip/:tripId", async (c) => {
 });
 
 // Tip-up management
-stationRouter.post("/tipup/set", async (c) => {
+stationRouter.post("/tipup/set", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = tipupSchema.safeParse(body);
@@ -225,7 +225,7 @@ stationRouter.post("/tipup/set", async (c) => {
         ${parsed.data.check_interval_min},
         ${parsed.data.location ? JSON.stringify(parsed.data.location) : null}::jsonb
       )
-      on conflict (gear_id) do update
+      on conflict (tenant_id, gear_id) do update
       set station_id = excluded.station_id,
           status = 'SET',
           tipup_type = excluded.tipup_type,
@@ -264,7 +264,7 @@ stationRouter.post("/tipup/set", async (c) => {
   return c.json({ ok: true, tipup_id: parsed.data.tipup_id, emitted_event_id: emitted.event_id });
 });
 
-stationRouter.post("/tipup/transition", async (c) => {
+stationRouter.post("/tipup/transition", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = tipupTransitionSchema.safeParse(body);
@@ -354,7 +354,7 @@ stationRouter.get("/tipups/:tripId", async (c) => {
   return c.json({ trip_id: tripId, tipups: rows });
 });
 
-stationRouter.post("/sweep/:tripId", async (c) => {
+stationRouter.post("/sweep/:tripId", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
 

@@ -118,7 +118,7 @@ integrationsRouter.post("/configs/upsert", requireRole("ORG_ADMIN", "OWNER"), as
         ${parsed.data.integration_id}, ${auth.tenantId}, ${parsed.data.integration_type}, ${parsed.data.provider},
         ${parsed.data.enabled}, ${JSON.stringify(parsed.data.config_json)}::jsonb, now()
       )
-      on conflict (integration_id) do update
+      on conflict (tenant_id, integration_id) do update
       set integration_type = excluded.integration_type,
           provider = excluded.provider,
           enabled = excluded.enabled,

@@ -66,7 +66,7 @@ const catchQASchema = z.object({
 
 export const catchRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
-catchRouter.post("/record", async (c) => {
+catchRouter.post("/record", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = catchRecordSchema.safeParse(body);
@@ -91,7 +91,7 @@ catchRouter.post("/record", async (c) => {
         ${parsed.data.measurement_confidence ?? null}, ${parsed.data.qa_flagged}, ${parsed.data.qa_reason ?? null},
         ${auth.actorId}
       )
-      on conflict (catch_id) do update
+      on conflict (tenant_id, catch_id) do update
       set species = excluded.species,
           kept = excluded.kept,
           release_reason = excluded.release_reason,
@@ -194,7 +194,7 @@ catchRouter.post("/correct", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCE
   return c.json({ ok: true, catch_id: parsed.data.catch_id, emitted_event_id: emitted.event_id });
 });
 
-catchRouter.post("/measurement", async (c) => {
+catchRouter.post("/measurement", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json();
   const parsed = catchMeasurementSchema.safeParse(body);
