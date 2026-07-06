@@ -5,7 +5,8 @@ import {
   clearDeviceIdentity,
   generateAndStoreDeviceIdentity,
   readDeviceIdentity,
-  signDraftEventHash
+  signDraftEventHash,
+  verifyDeviceIdentity
 } from "./deviceIdentity";
 import { verifyEd25519Signature } from "@northline/shared";
 
@@ -74,8 +75,22 @@ describe("mobile device identity", () => {
 
   it("clears local device identity material", async () => {
     await generateAndStoreDeviceIdentity("crew_1");
-    clearDeviceIdentity();
+    await clearDeviceIdentity();
 
     expect(readDeviceIdentity()).toEqual({ deviceId: null, publicKey: null, hasPrivateKey: false });
+    expect(await signDraftEventHash("event_hash_1")).toBeNull();
+  });
+
+  it("degrades a stale indexeddb key flag when the stored key is missing", async () => {
+    localStorage.setItem("northline.mobile_ops.device_id", "mobile_crew_1_stale");
+    localStorage.setItem("northline.mobile_ops.device_public_key", "stale_public_key");
+    localStorage.setItem("northline.mobile_ops.device_key_storage", "indexeddb");
+
+    expect(readDeviceIdentity().hasPrivateKey).toBe(true);
+
+    const verified = await verifyDeviceIdentity();
+
+    expect(verified.hasPrivateKey).toBe(false);
+    expect(readDeviceIdentity().hasPrivateKey).toBe(false);
   });
 });

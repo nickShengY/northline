@@ -7,9 +7,10 @@
 
 body {
   min-height: 100vh;
+  min-height: 100dvh;
   background:
-    linear-gradient(180deg, rgba(45, 212, 191, 0.08), transparent 22rem),
-    linear-gradient(135deg, rgba(245, 158, 11, 0.06), transparent 28rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 8%, transparent), transparent 22rem),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-amber) 6%, transparent), transparent 28rem),
     linear-gradient(180deg, #08111f 0%, #111827 54%, #080b12 100%);
 }
 
@@ -34,7 +35,13 @@ select {
 
 .field-shell {
   position: relative;
-  padding-bottom: 7rem;
+  /* Keep clear of the bottom navigation plus the iOS home indicator. */
+  padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+}
+
+.meta {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
 }
 
 .mission-hero {
@@ -60,7 +67,6 @@ select {
     url("/northline-ui/panel-dark.webp"),
     linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(245, 158, 11, 0.1));
   background-size: cover;
-  box-shadow: var(--field-card-shadow);
 }
 
 .hero-copy h1 {
@@ -99,7 +105,6 @@ select {
   flex-direction: column;
   justify-content: space-between;
   gap: var(--space-5);
-  box-shadow: var(--field-card-shadow);
 }
 
 .hero-panel-top,
@@ -117,6 +122,8 @@ select {
   position: relative;
 }
 
+.hero-copy,
+.hero-panel,
 .command-card,
 .queue-card,
 .notes-card,
@@ -285,9 +292,14 @@ select {
 .module-switch.active {
   border-color: color-mix(in srgb, var(--accent-teal) 70%, var(--border-default));
   background:
-    linear-gradient(rgba(45, 212, 191, 0.12), rgba(56, 189, 248, 0.08)),
+    linear-gradient(
+      color-mix(in srgb, var(--accent-teal) 12%, transparent),
+      color-mix(in srgb, var(--accent-cyan) 8%, transparent)
+    ),
     var(--bg-glass-hover);
-  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.18), 0 18px 36px rgba(15, 118, 110, 0.16);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent-teal) 18%, transparent),
+    0 18px 36px color-mix(in srgb, var(--accent-teal) 16%, transparent);
 }
 
 .status-callout {
@@ -313,7 +325,7 @@ select {
   border-radius: 50%;
   background:
     radial-gradient(circle, var(--bg-secondary) 56%, transparent 57%),
-    conic-gradient(var(--accent-teal) var(--progress), rgba(148, 163, 184, 0.18) 0);
+    conic-gradient(var(--accent-teal) var(--progress), color-mix(in srgb, var(--ink-muted) 22%, transparent) 0);
 }
 
 .readiness-ring strong {
@@ -350,7 +362,7 @@ select {
   justify-content: center;
   flex: 0 0 auto;
   border-radius: var(--radius-md);
-  background: rgba(56, 189, 248, 0.12);
+  background: color-mix(in srgb, var(--accent-cyan) 12%, transparent);
   color: var(--accent-cyan);
 }
 
@@ -370,17 +382,17 @@ select {
 }
 
 .metric-tile.good .metric-icon {
-  background: rgba(34, 197, 94, 0.12);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
   color: var(--success);
 }
 
 .metric-tile.warning .metric-icon {
-  background: rgba(245, 158, 11, 0.14);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
   color: var(--warning);
 }
 
 .metric-tile.danger .metric-icon {
-  background: rgba(239, 68, 68, 0.14);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 
@@ -461,17 +473,35 @@ select {
   font-size: 0.92rem;
 }
 
-.bottom-navigation,
-.fixed.bottom-0 {
+.bottom-navigation {
   box-shadow: 0 -16px 32px rgba(2, 8, 23, 0.28);
+}
+
+.public-key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.public-key-row code {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 @media (prefers-color-scheme: light) {
   body {
     background:
-      linear-gradient(180deg, rgba(15, 143, 125, 0.07), transparent 22rem),
-      linear-gradient(135deg, rgba(180, 83, 9, 0.06), transparent 28rem),
+      linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 7%, transparent), transparent 22rem),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-amber) 6%, transparent), transparent 28rem),
       linear-gradient(180deg, #f8fafc 0%, #eef4f8 100%);
+  }
+
+  /* The grid overlay uses white hairlines for dark mode; flip to dark ones. */
+  body::before {
+    background-image:
+      linear-gradient(rgba(2, 8, 23, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(2, 8, 23, 0.05) 1px, transparent 1px);
   }
 
   .hero-copy {
@@ -482,7 +512,7 @@ select {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1024px) {
   .mission-hero,
   .module-grid {
     grid-template-columns: 1fr 1fr;
@@ -498,7 +528,7 @@ select {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .field-shell {
     padding-left: var(--space-3);
     padding-right: var(--space-3);

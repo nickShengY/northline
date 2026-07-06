@@ -22,6 +22,24 @@ export function readDeviceIdentity(): DeviceIdentitySummary {
   };
 }
 
+/**
+ * Async verification of the fast localStorage summary. The "indexeddb" flag
+ * can go stale (e.g. the key database was cleared while the flag survived),
+ * so confirm the private key is actually retrievable before trusting it.
+ * Clears the stale flag when the key is gone so future reads degrade too.
+ */
+export async function verifyDeviceIdentity(): Promise<DeviceIdentitySummary> {
+  const summary = readDeviceIdentity();
+  if (localStorage.getItem(PRIVATE_KEY_KEY)) return summary;
+  if (localStorage.getItem(KEY_STORAGE_KEY) !== "indexeddb") return summary;
+
+  const secureKey = await readSecurePrivateKey();
+  if (secureKey) return summary;
+
+  localStorage.removeItem(KEY_STORAGE_KEY);
+  return { ...summary, hasPrivateKey: false };
+}
+
 export async function generateAndStoreDeviceIdentity(actorId: string): Promise<DeviceIdentitySummary> {
   const keyPair = await generateDeviceKeyPair();
   const deviceId = `mobile_${actorId}_${crypto.randomUUID().slice(0, 8)}`;
@@ -40,12 +58,12 @@ export async function generateAndStoreDeviceIdentity(actorId: string): Promise<D
   return { deviceId, publicKey: keyPair.publicKey, hasPrivateKey: true };
 }
 
-export function clearDeviceIdentity() {
+export async function clearDeviceIdentity(): Promise<void> {
   localStorage.removeItem(DEVICE_ID_KEY);
   localStorage.removeItem(PRIVATE_KEY_KEY);
   localStorage.removeItem(PUBLIC_KEY_KEY);
   localStorage.removeItem(KEY_STORAGE_KEY);
-  void deleteSecurePrivateKey();
+  await deleteSecurePrivateKey();
 }
 
 export async function signDraftEventHash(eventHash: string): Promise<{ deviceId: string; signature: string } | null> {

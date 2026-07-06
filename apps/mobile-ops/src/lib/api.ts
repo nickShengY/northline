@@ -157,7 +157,7 @@ export async function completeCheckin(input: { checkin_id: string; trip_id: stri
 
 export async function reportHazard(input: {
   hazard_id: string;
-  trip_id: string;
+  trip_id?: string;
   hazard_type: "CRACK" | "SLUSH" | "RIDGE" | "OPEN_WATER" | "WEATHER" | "GEAR_RISK";
   severity: number;
   confidence: number;
@@ -180,8 +180,8 @@ export async function listHazards(scope?: "PRIVATE" | "GROUP" | "ORG" | "DELAYED
   return parseJson<{ hazards: HazardRow[] }>(res, "Hazard list");
 }
 
-export async function getTripGear(tripId: string) {
-  const res = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}?mode=OFFSHORE`, {
+export async function getTripGear(tripId: string, mode: Mode = "OFFSHORE") {
+  const res = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}?mode=${mode}`, {
     headers: { Authorization: authHeader.Authorization }
   });
   return parseJson<{ gear: GearRow[] }>(res, "Gear list");
@@ -192,6 +192,7 @@ export async function transitionGear(input: {
   gear_id: string;
   transition: "SET" | "CHECKED" | "HAULED" | "MISSING" | "RECOVERED" | "REMOVED";
   note?: string;
+  mode?: Mode;
 }) {
   const res = await fetch(`${base}/v1/gear/transition`, {
     method: "POST",

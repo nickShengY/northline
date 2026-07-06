@@ -131,7 +131,9 @@ describe("mobile offline draft queue", () => {
   });
 
   it("keeps unsent drafts when reconciling a capped upload batch", () => {
-    const drafts = Array.from({ length: 252 }, (_, index) => event(`evt_${index}`));
+    const drafts = Array.from({ length: 252 }, (_, index) =>
+      event(`evt_${String(index).padStart(3, "0")}`, new Date(Date.UTC(2026, 4, 31, 0, 0, 0, index)).toISOString())
+    );
     const batch = nextSyncUploadBatch(drafts);
 
     expect(batch).toHaveLength(250);
@@ -141,6 +143,16 @@ describe("mobile offline draft queue", () => {
         rejected: []
       }).map((draft) => draft.event_id)
     ).toEqual(["evt_250", "evt_251"]);
+  });
+
+  it("batches uploads in device-chronological order regardless of queue order", () => {
+    const drafts = [
+      event("evt_b", "2026-05-31T00:02:00.000Z"),
+      event("evt_c", "2026-05-31T00:01:00.000Z"),
+      event("evt_a", "2026-05-31T00:01:00.000Z")
+    ];
+
+    expect(nextSyncUploadBatch(drafts).map((draft) => draft.event_id)).toEqual(["evt_a", "evt_c", "evt_b"]);
   });
 
   it("extracts actionable rejection reason codes from upload responses", () => {
@@ -181,6 +193,17 @@ describe("mobile offline draft queue", () => {
     expect(readDeviceChainHead("device_a")).toBe("hash_2");
     expect(readDeviceChainHead("device_b")).toBeNull();
     await expect(latestQueuedHashForDevice("device_a")).resolves.toBe("hash_2");
+  });
+
+  it("keeps the chronologically-latest accepted event as the chain head per device", () => {
+    const drafts = [
+      { ...event("evt_late", "2026-05-31T00:05:00.000Z"), device_id: "device_a", event_hash: "hash_late" },
+      { ...event("evt_early", "2026-05-31T00:01:00.000Z"), device_id: "device_a", event_hash: "hash_early" }
+    ];
+
+    updateDeviceChainHeadsFromAccepted(drafts, ["evt_late", "evt_early"]);
+
+    expect(readDeviceChainHead("device_a")).toBe("hash_late");
   });
 
   it("persists durable download cursors by scope", () => {

@@ -166,11 +166,24 @@ export async function readDraftEvents(): Promise<DraftEvent[]> {
   return readLegacyDraftEvents();
 }
 
+/**
+ * Chronological upload order: ts_device first, event_id as a stable tiebreak
+ * for same-millisecond events. Uploading in this order preserves each
+ * device's prev_hash chain.
+ */
+export function compareDraftEventOrder(left: DraftEvent, right: DraftEvent): number {
+  return left.ts_device.localeCompare(right.ts_device) || left.event_id.localeCompare(right.event_id);
+}
+
+export function sortDraftEventsForUpload(drafts: DraftEvent[]): DraftEvent[] {
+  return [...drafts].sort(compareDraftEventOrder);
+}
+
 export async function latestQueuedHashForDevice(deviceId: string): Promise<string | null> {
   const drafts = await readDraftEvents();
   const latest = drafts
     .filter((event) => event.device_id === deviceId)
-    .sort((left, right) => left.ts_device.localeCompare(right.ts_device))
+    .sort(compareDraftEventOrder)
     .at(-1);
   return latest?.event_hash ?? readChainHeads()[deviceId] ?? null;
 }
@@ -200,10 +213,13 @@ export function updateDeviceChainHeadsFromAccepted(drafts: DraftEvent[], accepte
 
   const accepted = new Set(acceptedEventIds);
   const heads = readChainHeads();
-  for (const event of drafts) {
-    if (accepted.has(event.event_id)) {
-      heads[event.device_id] = event.event_hash;
-    }
+  // Walk accepted events in chronological order so each device's head ends
+  // on its chronologically-latest accepted event, regardless of input order.
+  const acceptedDrafts = drafts
+    .filter((event) => accepted.has(event.event_id))
+    .sort(compareDraftEventOrder);
+  for (const event of acceptedDrafts) {
+    heads[event.device_id] = event.event_hash;
   }
   writeChainHeads(heads);
 }
@@ -243,12 +259,7 @@ export async function replaceDraftEvents(events: DraftEvent[]) {
 }
 
 export async function clearDraftEvents() {
-  const stored = await withStore("readwrite", (store) => store.clear());
-  if (stored.ok) {
-    localStorage.removeItem(legacyKey);
-    return;
-  }
-
+  await withStore("readwrite", (store) => store.clear());
   localStorage.removeItem(legacyKey);
 }
 
@@ -324,12 +335,13 @@ export function remainingDraftEventsAfterUpload(drafts: DraftEvent[], response: 
 }
 
 export function nextSyncUploadBatch(drafts: DraftEvent[]) {
-  return drafts.slice(0, maxSyncUploadBatchSize);
+  return sortDraftEventsForUpload(drafts).slice(0, maxSyncUploadBatchSize);
 }
 
 export function remainingDraftEventsAfterBatchedUpload(drafts: DraftEvent[], response: UploadEventsResponse) {
-  const batch = nextSyncUploadBatch(drafts);
-  const unsent = drafts.slice(maxSyncUploadBatchSize);
+  const sorted = sortDraftEventsForUpload(drafts);
+  const batch = sorted.slice(0, maxSyncUploadBatchSize);
+  const unsent = sorted.slice(maxSyncUploadBatchSize);
   return [...remainingDraftEventsAfterUpload(batch, response), ...unsent];
 }
 
