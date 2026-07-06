@@ -7,7 +7,6 @@ function manualChunks(id: string) {
   if (id.includes("@northline/ui")) return "ui";
   if (id.includes("@northline/shared")) return "shared";
   if (id.includes("/src/components/charts") || id.includes("/src/components/RealTimeFleetAI")) return "visualizations";
-  if (id.includes("/src/components/LLMUsageDashboard") || id.includes("/src/lib/openrouter-ai")) return "ai";
   if (id.includes("/src/lib/")) return "api-client";
   if (normalized.includes("/node_modules/")) {
     const pnpmPackage = normalized.match(/node_modules\/\.pnpm\/((?:@[^/+]+\+)?[^/@]+)@/);
@@ -40,8 +39,8 @@ export default defineConfig({
         name: "Northline Command Portal",
         short_name: "Northline",
         description: "Fleet operations, safety, and compliance management for commercial fishing",
-        theme_color: "#00d4ff",
-        background_color: "#050811",
+        theme_color: "#38bdf8",
+        background_color: "#08111f",
         display: "standalone",
         orientation: "any",
         scope: "/",

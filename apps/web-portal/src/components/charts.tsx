@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 // ============================================================================
 // NORTHLINE VISUALIZATION LIBRARY
@@ -92,10 +92,15 @@ const STATUS_COLORS = {
   LOW: "var(--success)",
   MODERATE: "var(--warning)",
   HIGH: "var(--danger)",
-  CRITICAL: "var(--danger)",
+  CRITICAL: "var(--critical)",
   COMPLETE: "var(--success)",
   PENDING: "var(--muted)"
 };
+
+/** Sanitize useId() output for use inside SVG defs id / url(#...) references. */
+function svgSafeId(raw: string, suffix: string) {
+  return `${raw.replace(/[^a-zA-Z0-9_-]/g, "")}-${suffix}`;
+}
 
 // --- Chart Components ---
 
@@ -113,17 +118,26 @@ export function BarChart({
   showValues?: boolean;
   animate?: boolean;
 }) {
-  const maxValue = Math.max(...data.datasets.flatMap(d => d.data));
+  const gradientId = svgSafeId(useId(), "barGradient");
+  const allValues = data.datasets.flatMap(d => d.data);
+  const maxValue = allValues.length > 0 ? Math.max(...allValues) : 0;
   const padding = { top: 20, right: 20, bottom: 40, left: 50 };
-  const chartWidth = 100 - (padding.left + padding.right) / 3;
+  // The viewBox is 300 units wide, so lay bars out in that same coordinate space.
+  const chartWidth = 300 - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const barWidth = (chartWidth / data.labels.length) * 0.6;
-  const gap = (chartWidth / data.labels.length) * 0.4;
+  const labelCount = Math.max(1, data.labels.length);
+  const barWidth = (chartWidth / labelCount) * 0.6;
+  const gap = (chartWidth / labelCount) * 0.4;
+
+  const primaryDataset = data.datasets[0];
+  const ariaLabel = `Bar chart: ${primaryDataset?.label ?? "values"}, ${data.labels
+    .map((label, i) => `${primaryDataset?.data[i] ?? 0} ${label}`)
+    .join(", ") || "no data"}`;
 
   return (
-    <svg viewBox={`0 0 300 ${height}`} className="chart-svg" preserveAspectRatio="none">
+    <svg viewBox={`0 0 300 ${height}`} className="chart-svg" preserveAspectRatio="none" role="img" aria-label={ariaLabel}>
       <defs>
-        <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.9" />
           <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.4" />
         </linearGradient>
@@ -172,7 +186,7 @@ export function BarChart({
               y={animate ? padding.top + chartHeight : y}
               width={barWidth}
               height={animate ? 0 : barHeight}
-              fill="url(#barGradient)"
+              fill={`url(#${gradientId})`}
               rx="2"
               className={animate ? "chart-bar-animate" : ""}
               style={animate ? {
@@ -252,9 +266,46 @@ export function DonutChart({
   const center = size / 2;
   let currentAngle = -Math.PI / 2;
 
+  const ariaLabel = total > 0
+    ? `Donut chart: ${data.map((d) => `${d.value} ${d.label}`).join(", ")}`
+    : "Donut chart: no data";
+
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} className="chart-svg donut-chart">
-      {data.map((segment, i) => {
+    <svg viewBox={`0 0 ${size} ${size}`} className="chart-svg donut-chart" role="img" aria-label={ariaLabel}>
+      {/* Empty-state ring when there is nothing to plot (avoids NaN arc math). */}
+      {total <= 0 && (
+        <circle
+          cx={center}
+          cy={center}
+          r={radius - thickness / 2}
+          fill="none"
+          stroke="var(--glass-border)"
+          strokeWidth={thickness}
+        />
+      )}
+
+      {total > 0 && data.map((segment, i) => {
+        if (segment.value <= 0) return null;
+
+        // A single segment covering 100% degenerates to a zero-length arc
+        // (identical start/end points), so render a full circle instead.
+        if (segment.value === total) {
+          return (
+            <circle
+              key={i}
+              cx={center}
+              cy={center}
+              r={radius}
+              fill={segment.color}
+              stroke="var(--glass-bg)"
+              strokeWidth="2"
+              className="donut-segment"
+            >
+              <title>{`${segment.label}: ${segment.value} (100%)`}</title>
+            </circle>
+          );
+        }
+
         const angle = (segment.value / total) * Math.PI * 2;
         const x1 = center + radius * Math.cos(currentAngle);
         const y1 = center + radius * Math.sin(currentAngle);
@@ -338,7 +389,12 @@ export function Sparkline({
   ).join(" ");
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="sparkline-svg">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="sparkline-svg"
+      role="img"
+      aria-label={`Trend line: ${data.length} points, latest ${data[data.length - 1]}, range ${min} to ${max}`}
+    >
       <path
         d={path}
         fill="none"
@@ -385,7 +441,7 @@ export function ProgressRing({
   const offset = circumference - (progress / 100) * circumference;
 
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} className="progress-ring">
+    <svg viewBox={`0 0 ${size} ${size}`} className="progress-ring" role="img" aria-label={`Progress: ${Math.round(progress)}%`}>
       {/* Background circle */}
       <circle
         cx={size / 2}
@@ -448,16 +504,31 @@ export function FleetMap({
   width?: number;
   height?: number;
 }) {
+  const uid = useId();
+  const gridId = svgSafeId(uid, "grid");
+  const glowId = svgSafeId(uid, "vesselGlow");
+
+  const statusCounts = vessels.reduce<Record<string, number>>((acc, vessel) => {
+    acc[vessel.status] = (acc[vessel.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const statusSummary = Object.entries(statusCounts)
+    .map(([status, count]) => `${count} ${status}`)
+    .join(", ");
+  const ariaLabel = vessels.length > 0
+    ? `Fleet map: ${vessels.length} vessels (${statusSummary})`
+    : "Fleet map: no vessels tracked";
+
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="fleet-map">
+    <svg viewBox={`0 0 ${width} ${height}`} className="fleet-map" role="img" aria-label={ariaLabel}>
       <defs>
         {/* Grid pattern */}
-        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <pattern id={gridId} width="40" height="40" patternUnits="userSpaceOnUse">
           <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--glass-border)" strokeWidth="0.5" opacity="0.3"/>
         </pattern>
 
         {/* Glow filter */}
-        <filter id="vesselGlow">
+        <filter id={glowId}>
           <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
           <feMerge>
             <feMergeNode in="coloredBlur"/>
@@ -467,7 +538,7 @@ export function FleetMap({
       </defs>
 
       {/* Background grid */}
-      <rect width={width} height={height} fill="url(#grid)" />
+      <rect width={width} height={height} fill={`url(#${gridId})`} />
 
       {/* Range rings */}
       <circle cx={width / 2} cy={height / 2} r="60" fill="none" stroke="var(--glass-border)" strokeWidth="1" strokeDasharray="4,4" opacity="0.5" />
@@ -482,7 +553,7 @@ export function FleetMap({
         return (
           <g key={vessel.id} className="vessel-marker" transform={`translate(${x}, ${y})`}>
             {/* Status ring */}
-            <circle r="20" fill="none" stroke={color} strokeWidth="2" opacity="0.3" filter="url(#vesselGlow)">
+            <circle r="20" fill="none" stroke={color} strokeWidth="2" opacity="0.3" filter={`url(#${glowId})`}>
               <animate attributeName="r" values="20;24;20" dur="2s" repeatCount="indefinite" />
               <animate attributeName="opacity" values="0.3;0.1;0.3" dur="2s" repeatCount="indefinite" />
             </circle>
@@ -543,17 +614,29 @@ export function TripTimeline({
   width?: number;
   height?: number;
 }) {
-  const totalDuration = phases.reduce((sum, p) => sum + (p.end.getTime() - p.start.getTime()), 0);
+  if (phases.length === 0) return null;
+
   const startTime = Math.min(...phases.map(p => p.start.getTime()));
+  const endTime = Math.max(...phases.map(p => p.end.getTime()));
+  const span = Math.max(1, endTime - startTime);
+
+  // Place the NOW marker from the actual current time within the phase span,
+  // clamped to the chart bounds.
+  const now = Date.now();
+  const nowX = Math.max(0, Math.min(width, ((now - startTime) / span) * width));
+
+  const ariaLabel = `Trip timeline: ${phases.length} ${phases.length === 1 ? "phase" : "phases"} — ${phases
+    .map((phase) => `${phase.name} (${phase.status})`)
+    .join(", ")}`;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="trip-timeline">
+    <svg viewBox={`0 0 ${width} ${height}`} className="trip-timeline" role="img" aria-label={ariaLabel}>
       {/* Timeline track */}
       <line x1="0" y1={height / 2} x2={width} y2={height / 2} stroke="var(--glass-border)" strokeWidth="2" />
 
       {phases.map((phase, i) => {
-        const phaseStart = ((phase.start.getTime() - startTime) / totalDuration) * width;
-        const phaseWidth = ((phase.end.getTime() - phase.start.getTime()) / totalDuration) * width;
+        const phaseStart = ((phase.start.getTime() - startTime) / span) * width;
+        const phaseWidth = ((phase.end.getTime() - phase.start.getTime()) / span) * width;
         const color = phase.status === "COMPLETE" ? "var(--success)" :
                      phase.status === "ACTIVE" ? "var(--accent)" : "var(--muted)";
 
@@ -602,7 +685,7 @@ export function TripTimeline({
       })}
 
       {/* Current time indicator */}
-      <g transform={`translate(${width * 0.6}, 0)`}>
+      <g transform={`translate(${nowX}, 0)`}>
         <line x1="0" y1="10" x2="0" y2={height - 10} stroke="var(--danger)" strokeWidth="2" strokeDasharray="4,2" />
         <polygon points="0,5 -4,10 4,10" fill="var(--danger)" />
         <text x="0" y={height - 2} textAnchor="middle" fontSize="7" fill="var(--danger)">NOW</text>
@@ -623,37 +706,56 @@ export function RiskHeatMap({
   width?: number;
   height?: number;
 }) {
+  const uid = useId();
+  const gradientIds: Record<RiskZone["severity"], string> = {
+    LOW: svgSafeId(uid, "riskLOW"),
+    MODERATE: svgSafeId(uid, "riskMODERATE"),
+    HIGH: svgSafeId(uid, "riskHIGH"),
+    CRITICAL: svgSafeId(uid, "riskCRITICAL")
+  };
+  const heatmapGridId = svgSafeId(uid, "heatmapGrid");
+
+  const severityCounts = zones.reduce<Record<string, number>>((acc, zone) => {
+    acc[zone.severity] = (acc[zone.severity] ?? 0) + 1;
+    return acc;
+  }, {});
+  const ariaLabel = zones.length > 0
+    ? `Risk heat map: ${zones.length} zones (${Object.entries(severityCounts)
+        .map(([severity, count]) => `${count} ${severity}`)
+        .join(", ")})`
+    : "Risk heat map: no risk zones";
+
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="risk-heatmap">
+    <svg viewBox={`0 0 ${width} ${height}`} className="risk-heatmap" role="img" aria-label={ariaLabel}>
       <defs>
-        <radialGradient id="riskLow">
+        <radialGradient id={gradientIds.LOW}>
           <stop offset="0%" stopColor="var(--success)" stopOpacity="0.6" />
           <stop offset="100%" stopColor="var(--success)" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="riskModerate">
+        <radialGradient id={gradientIds.MODERATE}>
           <stop offset="0%" stopColor="var(--warning)" stopOpacity="0.6" />
           <stop offset="100%" stopColor="var(--warning)" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="riskHigh">
+        <radialGradient id={gradientIds.HIGH}>
           <stop offset="0%" stopColor="var(--danger)" stopOpacity="0.7" />
           <stop offset="100%" stopColor="var(--danger)" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="riskCritical">
-          <stop offset="0%" stopColor="var(--danger)" stopOpacity="0.9" />
-          <stop offset="100%" stopColor="var(--danger)" stopOpacity="0.1" />
+        <radialGradient id={gradientIds.CRITICAL}>
+          <stop offset="0%" stopColor="var(--critical)" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="var(--critical)" stopOpacity="0.1" />
         </radialGradient>
       </defs>
 
       {/* Grid background */}
-      <pattern id="heatmapGrid" width="30" height="30" patternUnits="userSpaceOnUse">
+      <pattern id={heatmapGridId} width="30" height="30" patternUnits="userSpaceOnUse">
         <rect width="30" height="30" fill="var(--glass-bg)" opacity="0.3" />
         <path d="M 30 0 L 0 0 0 30" fill="none" stroke="var(--glass-border)" strokeWidth="0.5" opacity="0.2" />
       </pattern>
-      <rect width={width} height={height} fill="url(#heatmapGrid)" />
+      <rect width={width} height={height} fill={`url(#${heatmapGridId})`} />
 
       {/* Risk zones */}
       {zones.map((zone, i) => {
-        const gradientId = `risk${zone.severity}`;
+        const gradientId = gradientIds[zone.severity];
         return (
           <g key={i}>
             <circle
@@ -691,9 +793,9 @@ export function RiskHeatMap({
       {/* Legend */}
       <g transform={`translate(${width - 80}, 10)`}>
         <rect width="70" height="70" rx="6" fill="var(--glass-bg)" stroke="var(--glass-border)" />
-        {["LOW", "MODERATE", "HIGH", "CRITICAL"].map((level, i) => (
+        {(["LOW", "MODERATE", "HIGH", "CRITICAL"] as const).map((level, i) => (
           <g key={level} transform={`translate(8, ${10 + i * 15})`}>
-            <circle r="6" fill={`url(#risk${level})`} />
+            <circle r="6" fill={`url(#${gradientIds[level]})`} />
             <text x="15" y="3" fontSize="8" fill="var(--text-muted)">{level}</text>
           </g>
         ))}
@@ -739,8 +841,8 @@ export function GearHealthDashboard({
             <span className="health-value">{item.health}%</span>
           </div>
 
-          {/* SVG mini status */}
-          <svg viewBox="0 0 60 20" className="gear-mini-status">
+          {/* SVG mini status (decorative; health % is shown as text above) */}
+          <svg viewBox="0 0 60 20" className="gear-mini-status" aria-hidden="true">
             {/* Status indicator dots */}
             {[0, 1, 2, 3, 4].map((i) => (
               <circle
@@ -776,7 +878,8 @@ export function ComplianceProgress({
   const completed = checkpoints.filter(c => c.completed).length;
   const required = checkpoints.filter(c => c.required).length;
   const requiredCompleted = checkpoints.filter(c => c.required && c.completed).length;
-  const progress = (requiredCompleted / required) * 100;
+  // Avoid NaN% when there are no required checkpoints.
+  const progress = required > 0 ? (requiredCompleted / required) * 100 : 100;
 
   return (
     <div className="compliance-progress">
@@ -796,7 +899,7 @@ export function ComplianceProgress({
             key={checkpoint.name}
             className={`checkpoint-item ${checkpoint.completed ? "complete" : ""} ${checkpoint.required ? "required" : ""}`}
           >
-            <svg viewBox="0 0 20 20" className="checkpoint-icon">
+            <svg viewBox="0 0 20 20" className="checkpoint-icon" aria-hidden="true">
               {checkpoint.completed ? (
                 <>
                   <circle cx="10" cy="10" r="9" fill="var(--success)" fillOpacity="0.2" />
@@ -850,6 +953,14 @@ export function SyncHealthMonitor({
   const totalPending = nodes.reduce((sum, n) => sum + n.pendingCount, 0);
   const onlineCount = nodes.filter(n => n.status === "ONLINE").length;
 
+  // Scale node spacing so every node stays inside the 300-unit viewBox.
+  const deviceAreaStart = 100;
+  const deviceAreaEnd = 280;
+  const nodeSpacing = nodes.length > 1
+    ? Math.min(60, (deviceAreaEnd - deviceAreaStart) / (nodes.length - 1))
+    : 0;
+  const nodeX = (index: number) => deviceAreaStart + index * nodeSpacing;
+
   return (
     <div className="sync-monitor">
       {/* Header stats */}
@@ -865,14 +976,19 @@ export function SyncHealthMonitor({
       </div>
 
       {/* Network visualization */}
-      <svg viewBox="0 0 300 120" className="sync-network-viz">
-        {/* Connection lines */}
-        {nodes.slice(1).map((node, i) => (
+      <svg
+        viewBox="0 0 300 120"
+        className="sync-network-viz"
+        role="img"
+        aria-label={`Sync network: ${onlineCount} of ${nodes.length} devices online, ${totalPending} pending changes`}
+      >
+        {/* Connection lines: one per device node, at that node's own position */}
+        {nodes.map((node, i) => (
           <line
-            key={`line-${i}`}
+            key={`line-${node.id}`}
             x1={50}
             y1={60}
-            x2={100 + i * 60}
+            x2={nodeX(i)}
             y2={60}
             stroke={node.status === "ONLINE" ? "var(--success)" : "var(--glass-border)"}
             strokeWidth="2"
@@ -899,7 +1015,7 @@ export function SyncHealthMonitor({
 
         {/* Device nodes */}
         {nodes.map((node, i) => {
-          const x = 100 + i * 60;
+          const x = nodeX(i);
           const color = STATUS_COLORS[node.status] || "var(--text-muted)";
 
           return (
@@ -973,7 +1089,12 @@ export function TraceabilityFlow({
 }) {
   return (
     <div className="traceability-flow">
-      <svg viewBox="0 0 500 80" className="flow-svg">
+      <svg
+        viewBox="0 0 500 80"
+        className="flow-svg"
+        role="img"
+        aria-label={`Traceability flow: ${stages.map((stage) => `${stage.name} ${stage.status}`).join(", ")}`}
+      >
         {/* Connecting line */}
         <line
           x1="40" y1="40" x2="460" y2="40"

@@ -5,74 +5,55 @@
  */
 
 :root {
-  color-scheme: dark light;
+  /*
+   * App-level aliases derived from the @northline/ui design tokens
+   * (packages/ui/src/styles.css) so there is a single source of truth.
+   * Shared tokens (--success, --danger, --radius-*, --space-*, fonts,
+   * transitions, material assets) come from the ui package; only aliases
+   * and genuinely app-specific values live here.
+   */
 
-  /* Core Colors */
-  --bg: #08111f;
-  --bg-soft: #0d1828;
-  --bg-soft-2: #122033;
-  --bg-elevated: #17263a;
+  /* Surfaces (aliases of ui tokens) */
+  --bg: var(--bg-primary);
+  --bg-soft: var(--bg-secondary);
+  --bg-soft-2: var(--bg-tertiary);
 
-  /* Text Colors */
-  --ink: #f4f8fb;
-  --ink-soft: #b7c8d7;
-  --ink-muted: #7d93a7;
+  /* Text (aliases of ui tokens) */
+  --ink: var(--ink-primary);
+  --ink-soft: var(--ink-secondary);
 
-  /* Accent Colors */
-  --accent: #38bdf8;
-  --accent-teal: #2dd4bf;
-  --accent-purple: #7c8fa5;
-  --accent-pink: #e11d48;
-  --accent-warm: #f59e0b;
-  --danger: #ef4444;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --info: #38bdf8;
-  --muted: #64748b;
+  /* Accents (aliases of ui tokens) */
+  --accent: var(--accent-cyan);
+  --accent-warm: var(--warning);
+  --muted: var(--ink-muted);
 
-  /* Gradients */
-  --gradient-primary: linear-gradient(135deg, #38bdf8 0%, #2dd4bf 100%);
-  --gradient-warm: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
-  --gradient-cool: linear-gradient(135deg, #38bdf8 0%, #0f8f7d 100%);
-  --gradient-success: linear-gradient(135deg, #22c55e 0%, #2dd4bf 100%);
-  --gradient-danger: linear-gradient(135deg, #ef4444 0%, #e11d48 100%);
+  /* Distinct critical tone so CRITICAL reads differently from HIGH (--danger) */
+  --critical: color-mix(in srgb, var(--danger) 45%, var(--accent-rose));
 
-  /* Surfaces */
-  --glass-bg: rgba(17, 31, 49, 0.84);
-  --glass-bg-hover: rgba(24, 41, 62, 0.94);
-  --line: rgba(148, 163, 184, 0.18);
-  --line-hover: rgba(56, 189, 248, 0.36);
-  --glass-border: rgba(148, 163, 184, 0.22);
-  --glass-shadow: 0 16px 42px rgba(1, 10, 20, 0.26);
-  --glass-shadow-hover: 0 20px 48px rgba(6, 78, 116, 0.24);
-  --ui-panel-material: url("/northline-ui/panel-dark.webp");
-  --ui-button-material: url("/northline-ui/button-primary.webp");
-  --ui-danger-material: url("/northline-ui/button-danger.webp");
-  --ui-material-opacity: 0.2;
+  /* Gradients (app-specific, built from ui tokens) */
+  --gradient-primary: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-teal) 100%);
+  --gradient-warm: linear-gradient(135deg, var(--warning) 0%, var(--danger) 100%);
+  --gradient-cool: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-teal) 100%);
+  --gradient-success: linear-gradient(135deg, var(--success) 0%, var(--accent-teal) 100%);
+  --gradient-danger: linear-gradient(135deg, var(--danger) 0%, var(--accent-rose) 100%);
 
-  /* Typography */
-  --font-display: "Manrope", "Segoe UI", system-ui, sans-serif;
-  --font-body: "Manrope", "Segoe UI", system-ui, sans-serif;
+  /* Glass surfaces (aliases of ui tokens) */
+  --glass-bg: var(--bg-glass);
+  --glass-bg-hover: var(--bg-glass-hover);
+  --line: var(--border-glass);
+  --line-hover: var(--border-hover);
+  --glass-border: var(--border-glass);
+  --glass-shadow: var(--shadow-md);
+  --glass-shadow-hover: var(--shadow-glow-cyan);
+
+  /* Typography alias used by chart styles */
   --font-family: var(--font-body);
 
-  /* Spacing */
-  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem;
-  --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem;
-
-  /* Border Radius */
-  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 10px; --radius-xl: 14px; --radius-full: 9999px;
-
-  /* Transitions */
-  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
-
   /* Legacy aliases used by visualization components */
-  --text-primary: var(--ink);
+  --text-primary: var(--ink-primary);
   --text-muted: var(--ink-muted);
-  --panel-bg: var(--bg-soft);
-  --bg-primary: var(--bg);
-  --glow-accent: rgba(56, 189, 248, 0.28);
+  --panel-bg: var(--bg-secondary);
+  --glow-accent: color-mix(in srgb, var(--accent-cyan) 28%, transparent);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -88,55 +69,21 @@ body {
   color: var(--ink);
   font-family: var(--font-body);
   background:
-    radial-gradient(circle at 12% 0%, rgba(56, 189, 248, 0.1), transparent 34rem),
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent-cyan) 10%, transparent), transparent 34rem),
     linear-gradient(180deg, var(--bg) 0%, #050b14 100%);
   line-height: 1.6;
   overflow-x: hidden;
   min-height: 100vh;
 }
 
+/*
+ * Light mode: all app aliases derive from the ui tokens, which already carry
+ * their own light-scheme overrides, so only the body backdrop needs adjusting.
+ */
 @media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f8fb;
-    --bg-soft: #ffffff;
-    --bg-soft-2: #eef3f8;
-    --bg-elevated: #ffffff;
-    --ink: #102033;
-    --ink-soft: #354a60;
-    --ink-muted: #4f647a;
-    --accent: #087fb0;
-    --accent-teal: #0f8f7d;
-    --accent-purple: #60748c;
-    --accent-pink: #be123c;
-    --accent-warm: #b45309;
-    --danger: #dc2626;
-    --success: #15803d;
-    --warning: #b45309;
-    --info: #087fb0;
-    --gradient-primary: linear-gradient(135deg, #087fb0 0%, #0f8f7d 100%);
-    --gradient-warm: linear-gradient(135deg, #b45309 0%, #dc2626 100%);
-    --gradient-cool: linear-gradient(135deg, #087fb0 0%, #0f8f7d 100%);
-    --gradient-success: linear-gradient(135deg, #15803d 0%, #0f8f7d 100%);
-    --gradient-danger: linear-gradient(135deg, #dc2626 0%, #be123c 100%);
-    --glass-bg: rgba(255, 255, 255, 0.9);
-    --glass-bg-hover: rgba(255, 255, 255, 0.98);
-    --line: rgba(96, 116, 140, 0.22);
-    --line-hover: rgba(8, 127, 176, 0.28);
-    --glass-border: rgba(96, 116, 140, 0.2);
-    --glass-shadow: 0 14px 34px rgba(16, 32, 51, 0.1);
-    --glass-shadow-hover: 0 18px 42px rgba(8, 127, 176, 0.13);
-    --ui-panel-material: url("/northline-ui/panel-light.webp");
-    --ui-material-opacity: 0.14;
-    --text-primary: var(--ink);
-    --text-muted: var(--ink-muted);
-    --panel-bg: var(--bg-soft);
-    --bg-primary: var(--bg);
-    --glow-accent: rgba(8, 127, 176, 0.2);
-  }
-
   body {
     background:
-      radial-gradient(circle at 12% 0%, rgba(8, 127, 176, 0.09), transparent 30rem),
+      radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent-cyan) 9%, transparent), transparent 30rem),
       linear-gradient(180deg, #f8fafc 0%, #edf3f8 100%);
   }
 }
@@ -258,16 +205,6 @@ h3 { font-size: clamp(1.05rem, 1.1vw, 1.35rem); }
   display: grid;
   grid-template-columns: minmax(8rem, 0.7fr) minmax(0, 1fr);
   gap: var(--space-2);
-}
-
-.admin-inline select {
-  width: 100%;
-  min-height: 3rem;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  color: var(--ink);
-  background: var(--bg-soft-2);
 }
 
 /* Eyebrow Label */
@@ -416,6 +353,12 @@ button {
   position: relative;
   overflow: hidden;
   width: auto;
+}
+
+/* Legacy panel buttons stack vertically and need breathing room; scoped so
+   the margin does not leak onto every button in the app. */
+.panel > button,
+.admin-form > button {
   margin-top: var(--space-3);
 }
 
@@ -455,7 +398,7 @@ button.secondary:hover {
 
 button.active {
   border-color: var(--accent);
-  background: rgba(0, 212, 255, 0.16);
+  background: color-mix(in srgb, var(--accent-cyan) 16%, transparent);
   color: var(--ink);
 }
 
@@ -479,13 +422,18 @@ input {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   transition: all var(--transition-base);
+}
+
+/* Scoped spacing for raw inputs inside legacy panels only. */
+.panel input,
+.admin-form input {
   margin-top: var(--space-3);
 }
 
 input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-cyan) 10%, transparent);
 }
 
 input::placeholder {
@@ -525,9 +473,9 @@ input::placeholder {
 }
 
 .badge-info {
-  background: rgba(0, 212, 255, 0.15);
+  background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
   color: var(--accent);
-  border-color: rgba(0, 212, 255, 0.3);
+  border-color: color-mix(in srgb, var(--accent-cyan) 30%, transparent);
 }
 
 /* Helper Text */
@@ -582,8 +530,8 @@ input::placeholder {
 }
 
 @keyframes glow {
-  0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.3); }
-  50% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.6); }
+  0%, 100% { box-shadow: 0 0 20px color-mix(in srgb, var(--accent-cyan) 30%, transparent); }
+  50% { box-shadow: 0 0 40px color-mix(in srgb, var(--accent-cyan) 60%, transparent); }
 }
 
 .animate-fade-in {
@@ -623,7 +571,7 @@ input::placeholder {
 
 /* Selection */
 ::selection {
-  background: rgba(0, 212, 255, 0.3);
+  background: color-mix(in srgb, var(--accent-cyan) 30%, transparent);
   color: var(--ink);
 }
 
@@ -662,7 +610,7 @@ input::placeholder {
 
 .list-section li:hover {
   border-color: var(--accent);
-  background: rgba(0, 212, 255, 0.05);
+  background: color-mix(in srgb, var(--accent-cyan) 5%, transparent);
 }
 
 .list-section li strong {
@@ -674,7 +622,7 @@ input::placeholder {
 }
 
 .activity-info {
-  border-color: rgba(0, 212, 255, 0.35) !important;
+  border-color: color-mix(in srgb, var(--accent-cyan) 35%, transparent) !important;
 }
 
 .activity-success {
@@ -768,7 +716,7 @@ input::placeholder {
   width: 100%;
   height: 250px;
   border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, var(--panel-bg) 0%, rgba(0, 212, 255, 0.05) 100%);
+  background: linear-gradient(135deg, var(--panel-bg) 0%, color-mix(in srgb, var(--accent-cyan) 5%, transparent) 100%);
 }
 
 .vessel-marker {
@@ -915,7 +863,7 @@ input::placeholder {
 }
 
 .checkpoint-item.complete {
-  background: rgba(0, 255, 136, 0.1);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
   border-color: var(--success);
 }
 
@@ -1041,13 +989,13 @@ input::placeholder {
 }
 
 .flow-stage-card.active {
-  background: rgba(0, 212, 255, 0.1);
+  background: color-mix(in srgb, var(--accent-cyan) 10%, transparent);
   border-color: var(--accent);
   box-shadow: 0 0 20px var(--glow-accent);
 }
 
 .flow-stage-card.complete {
-  background: rgba(0, 255, 136, 0.1);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
   border-color: var(--success);
 }
 

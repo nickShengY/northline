@@ -1,66 +1,52 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 
-interface Size {
-  width: number;
-  height: number;
+/**
+ * Resolve a CSS custom property against the document root, with a fallback.
+ */
+function resolveCssToken(token: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  return value || fallback;
 }
 
 /**
- * Hook to observe element size changes using ResizeObserver
- * Returns responsive dimensions for chart sizing
+ * Copy computed presentation styles onto a cloned SVG tree so that CSS
+ * variables (var(--accent) etc.) resolve to concrete values before the SVG is
+ * serialized for export. Serialized SVG strings have no access to the page
+ * stylesheet, so unresolved var() references would render as black/transparent.
  */
-export function useResizeObserver<T extends HTMLElement>(): [React.RefObject<T | null>, Size] {
-  const ref = useRef<T>(null);
-  const [size, setSize] = useState<Size>({ width: 0, height: 0 });
+const EXPORT_STYLE_PROPS = [
+  "fill",
+  "stroke",
+  "stroke-width",
+  "stop-color",
+  "stop-opacity",
+  "color",
+  "opacity",
+  "font-family",
+  "font-size",
+  "font-weight",
+  "text-anchor"
+] as const;
 
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
+function inlineComputedStyles(source: SVGSVGElement, clone: SVGSVGElement) {
+  const sourceElements = [source, ...Array.from(source.querySelectorAll<SVGElement>("*"))];
+  const cloneElements = [clone, ...Array.from(clone.querySelectorAll<SVGElement>("*"))];
 
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        setSize({ width, height });
+  sourceElements.forEach((element, index) => {
+    const target = cloneElements[index];
+    if (!target) return;
+    const computed = window.getComputedStyle(element);
+    for (const prop of EXPORT_STYLE_PROPS) {
+      const value = computed.getPropertyValue(prop);
+      if (value) {
+        target.style.setProperty(prop, value);
       }
-    });
-
-    resizeObserver.observe(element);
-
-    // Initial size
-    const { width, height } = element.getBoundingClientRect();
-    setSize({ width, height });
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, []);
-
-  return [ref, size];
+    }
+  });
 }
 
 /**
- * Hook to get responsive chart dimensions based on container size
- * @param baseWidth Default width
- * @param baseHeight Default height
- * @param aspectRatio Optional aspect ratio to maintain (width/height)
- */
-export function useResponsiveChart(
-  baseWidth = 300,
-  baseHeight = 200,
-  aspectRatio?: number
-): [React.RefObject<HTMLDivElement | null>, number, number] {
-  const [ref, size] = useResizeObserver<HTMLDivElement>();
-
-  const width = Math.max(size.width || baseWidth, 100);
-  const height = aspectRatio
-    ? Math.round(width / aspectRatio)
-    : Math.max(size.height || baseHeight, 100);
-
-  return [ref, width, height];
-}
-
-/**
- * Hook for PNG/SVG export of chart elements
+ * Hook for PNG export of chart elements
  */
 export function useChartExport() {
   const exportToPNG = useCallback(async (
@@ -69,63 +55,60 @@ export function useChartExport() {
     options?: { scale?: number; backgroundColor?: string }
   ) => {
     const scale = options?.scale ?? 2;
-    const backgroundColor = options?.backgroundColor ?? "#0a1628";
+    // Resolve the export background from the design tokens rather than a hardcoded hex.
+    const backgroundColor = options?.backgroundColor ?? resolveCssToken("--bg-primary", "#08111f");
 
     // Get SVG dimensions
     const rect = svgElement.getBoundingClientRect();
-    const width = rect.width * scale;
-    const height = rect.height * scale;
+    const width = Math.max(1, Math.round(rect.width * scale));
+    const height = Math.max(1, Math.round(rect.height * scale));
+
+    // Clone and inline computed styles so CSS variables resolve in the export.
+    const clone = svgElement.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("width", String(rect.width));
+    clone.setAttribute("height", String(rect.height));
+    inlineComputedStyles(svgElement, clone);
 
     // Serialize SVG
-    const svgData = new XMLSerializer().serializeToString(svgElement);
+    const svgData = new XMLSerializer().serializeToString(clone);
     const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(svgBlob);
 
-    // Create canvas
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas context not available");
+    try {
+      // Create canvas
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas context not available");
 
-    // Fill background
-    ctx.fillStyle = backgroundColor;
-    ctx.fillRect(0, 0, width, height);
+      // Fill background
+      ctx.fillStyle = backgroundColor;
+      ctx.fillRect(0, 0, width, height);
 
-    // Load SVG and draw
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, width, height);
-        URL.revokeObjectURL(url);
-        resolve();
-      };
-      img.onerror = reject;
-      img.src = url;
-    });
+      // Load SVG and draw
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve();
+        };
+        img.onerror = () => reject(new Error("Failed to rasterize chart SVG"));
+        img.src = url;
+      });
 
-    // Download
-    const pngUrl = canvas.toDataURL("image/png");
-    const link = document.createElement("a");
-    link.download = filename;
-    link.href = pngUrl;
-    link.click();
+      // Download
+      const pngUrl = canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      link.download = filename;
+      link.href = pngUrl;
+      link.click();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }, []);
 
-  const exportToSVG = useCallback((svgElement: SVGSVGElement, filename: string) => {
-    const svgData = new XMLSerializer().serializeToString(svgElement);
-    const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(svgBlob);
-
-    const link = document.createElement("a");
-    link.download = filename;
-    link.href = url;
-    link.click();
-
-    setTimeout(() => URL.revokeObjectURL(url), 100);
-  }, []);
-
-  return { exportToPNG, exportToSVG };
+  return { exportToPNG };
 }
 
 /**

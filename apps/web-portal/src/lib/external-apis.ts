@@ -1,13 +1,11 @@
 /**
  * EXTERNAL MARINE DATA API CLIENT
  *
- * Integrates with free external APIs for real-world data:
- * - Open-Meteo Marine Weather API (free, no key required)
- * - AISStream.io through the API proxy when server-side credentials are configured.
+ * Integrates with the free Open-Meteo Marine Weather API (no key required).
+ * Vessel AIS data flows through the Northline API proxy (see hooks/useAISBackend.ts).
  */
 
 const OPEN_METEO_BASE = "https://marine-api.open-meteo.com/v1";
-const AISSTREAM_WS = "wss://stream.aisstream.io/v0/stream";
 
 export interface MarineWeatherData {
   time: string[];
@@ -17,20 +15,6 @@ export interface MarineWeatherData {
   windSpeed: number[]; // km/h
   windDirection: number[]; // degrees
   seaSurfaceTemperature: number[]; // celsius
-}
-
-export interface AISVesselData {
-  mmsi: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  speedOverGround: number; // knots
-  courseOverGround: number; // degrees
-  heading: number; // degrees
-  timestamp: string;
-  vesselType: string;
-  status: string;
-  destination?: string;
 }
 
 /**
@@ -121,158 +105,6 @@ export async function getCurrentMarineConditions(
   } catch {
     return null;
   }
-}
-
-/**
- * AISStream WebSocket Connection for Real-Time Vessel Tracking
- *
- * Usage:
- * const connection = connectAISStream({
- *   onVesselUpdate: (vessel) => console.log(vessel),
- *   boundingBox: [[-180, -90], [180, 90]] // [minLon, minLat], [maxLon, maxLat]
- * });
- *
- * connection.close(); // Disconnect when done
- */
-export interface AISStreamOptions {
-  apiKey?: string;
-  boundingBox?: [[number, number], [number, number]];
-  onVesselUpdate: (vessel: AISVesselData) => void;
-  onConnect?: () => void;
-  onError?: (error: Error) => void;
-}
-
-export function connectAISStream(options: AISStreamOptions): { close: () => void } {
-  const apiKey = options.apiKey;
-
-  if (!apiKey) {
-    console.warn("AISStream browser credentials are disabled. Use the Northline API AIS proxy instead.");
-    options.onError?.(new Error("AISStream API proxy required"));
-    return { close: () => {} };
-  }
-
-  const ws = new WebSocket(AISSTREAM_WS);
-
-  ws.onopen = () => {
-    console.log("AISStream connected");
-    options.onConnect?.();
-
-    // Subscribe to vessels in bounding box
-    const subscriptionMessage = {
-      APIKey: apiKey,
-      BoundingBoxes: options.boundingBox ? [options.boundingBox] : [[[-180, -90], [180, 90]]],
-      FilterMessageTypes: ["PositionReport"]
-    };
-
-    ws.send(JSON.stringify(subscriptionMessage));
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const message = JSON.parse(event.data);
-
-      // Handle vessel position reports
-      if (message.MessageType === "PositionReport") {
-        const report = message.Message?.PositionReport;
-        const metadata = message.MetaData;
-
-        if (report && metadata) {
-          const vessel: AISVesselData = {
-            mmsi: metadata.MMSI || "Unknown",
-            name: metadata.ShipName?.trim() || `Vessel ${metadata.MMSI}`,
-            latitude: report.Latitude ?? 0,
-            longitude: report.Longitude ?? 0,
-            speedOverGround: report.Sog ?? 0, // knots
-            courseOverGround: report.Cog ?? 0, // degrees
-            heading: report.TrueHeading ?? report.Cog ?? 0,
-            timestamp: new Date().toISOString(),
-            vesselType: metadata.type || "Unknown",
-            status: report.NavigationalStatus || "Unknown",
-            destination: metadata.Destination
-          };
-
-          options.onVesselUpdate(vessel);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to parse AIS message:", err);
-    }
-  };
-
-  ws.onerror = (error) => {
-    console.error("AISStream WebSocket error:", error);
-    options.onError?.(new Error("AISStream connection failed"));
-  };
-
-  ws.onclose = () => {
-    console.log("AISStream disconnected");
-  };
-
-  return {
-    close: () => {
-      ws.close();
-    }
-  };
-}
-
-/**
- * Hook-compatible: Get vessels in a specific region (one-time fetch)
- * Note: AISStream is WebSocket-based for real-time. For static data,
- * you may need to use a REST API like MarineTraffic (paid) or cache WebSocket data.
- */
-export function useAISVessels(
-  boundingBox: [[number, number], [number, number]],
-  onUpdate: (vessels: AISVesselData[]) => void
-): { close: () => void } {
-  const vessels = new Map<string, AISVesselData>();
-
-  return connectAISStream({
-    boundingBox,
-    onVesselUpdate: (vessel) => {
-      vessels.set(vessel.mmsi, vessel);
-      // Throttle updates to avoid excessive re-renders
-      onUpdate(Array.from(vessels.values()));
-    }
-  });
-}
-
-/**
- * Convert real AIS vessel to Northline VesselPosition format
- */
-export function convertAISVesselToNorthline(vessel: AISVesselData): {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  status: "ACTIVE" | "TRANSIT" | "FISHING" | "DOCKED";
-  heading: number;
-  speed: number;
-  lastCheckin: string;
-} {
-  // Convert lat/lon to 0-100 scale for our tactical map
-  const x = ((vessel.longitude + 180) / 360) * 100;
-  const y = ((vessel.latitude + 90) / 180) * 100;
-
-  // Determine status based on speed
-  let status: "ACTIVE" | "TRANSIT" | "FISHING" | "DOCKED" = "TRANSIT";
-  if (vessel.speedOverGround < 0.5) {
-    status = "DOCKED";
-  } else if (vessel.speedOverGround > 5 && vessel.speedOverGround < 8) {
-    status = "FISHING"; // Typical fishing speed
-  } else if (vessel.speedOverGround >= 8) {
-    status = "TRANSIT";
-  }
-
-  return {
-    id: vessel.mmsi,
-    name: vessel.name,
-    x: Math.max(0, Math.min(100, x)),
-    y: Math.max(0, Math.min(100, y)),
-    status,
-    heading: vessel.heading,
-    speed: vessel.speedOverGround,
-    lastCheckin: vessel.timestamp
-  };
 }
 
 /**

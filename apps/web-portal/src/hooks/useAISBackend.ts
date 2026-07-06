@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { readRuntimeToken } from "@northline/shared";
 import type { VesselPosition } from "../components/charts";
+import { boundingBoxToRegion, projectToMap } from "../lib/geo";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
@@ -16,14 +17,6 @@ function getAuthHeaders() {
     Authorization: `Bearer ${resolvedToken}`,
     "Content-Type": "application/json"
   };
-}
-
-function queryString(params: Record<string, number>) {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    search.set(key, String(value));
-  }
-  return search.toString();
 }
 
 interface AISVesselData {
@@ -87,7 +80,7 @@ interface AISVesselResponse {
 }
 
 export function useAISBackend(
-  _boundingBox: [[number, number], [number, number]],
+  boundingBox: [[number, number], [number, number]],
   options: UseAISBackendOptions = {}
 ) {
   const [vessels, setVessels] = useState<AISVesselData[]>([]);
@@ -103,6 +96,8 @@ export function useAISBackend(
   const smoothingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const vesselsRef = useRef(vessels);
   const optionsRef = useRef(options);
+  const fetchSeqRef = useRef(0);
+  const hasConnectedRef = useRef(false);
 
   useEffect(() => {
     vesselsRef.current = vessels;
@@ -113,8 +108,13 @@ export function useAISBackend(
   }, [options]);
 
   const fetchVessels = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
     try {
-      setConnectionStatus("connecting");
+      // Only surface the "connecting" state before the first successful poll;
+      // subsequent background polls should not flicker the status indicator.
+      if (!hasConnectedRef.current) {
+        setConnectionStatus("connecting");
+      }
       const response = await fetch(`${API_BASE}/v1/ais/vessels`, {
         headers: getAuthHeaders()
       });
@@ -124,16 +124,25 @@ export function useAISBackend(
       }
 
       const data = (await response.json()) as AISVesselResponse;
+      // Ignore stale responses that resolve after a newer poll started.
+      if (seq !== fetchSeqRef.current) return;
+
       const next = Array.isArray(data.vessels) ? data.vessels : [];
       setVessels(next);
+      // Seed the smoothing buffer so the map does not blank out between polls.
+      setSmoothedVessels((prev) => (prev.length === 0 ? next : prev));
       setError(null);
+      hasConnectedRef.current = true;
       setConnectionStatus("connected");
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return;
       setConnectionStatus("error");
       setError(err instanceof Error ? err.message : "Failed to fetch vessel data");
-      setVessels([]);
+      // Keep the last known vessels rather than wiping the map on one failed poll.
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -150,7 +159,7 @@ export function useAISBackend(
 
   useEffect(() => {
     if (vessels.length === 0) {
-      setSmoothedVessels([]);
+      // No fresh data: keep the last smoothed positions instead of blanking the map.
       return;
     }
 
@@ -302,13 +311,18 @@ export function useAISBackend(
       return;
     }
 
-    const predictions: CollisionPrediction[] = [];
+    const pairs: Array<[AISVesselData, AISVesselData]> = [];
     for (let i = 0; i < candidates.length; i += 1) {
       for (let j = i + 1; j < candidates.length; j += 1) {
         const vesselA = candidates[i];
         const vesselB = candidates[j];
-        if (!vesselA || !vesselB) continue;
+        if (vesselA && vesselB) pairs.push([vesselA, vesselB]);
+      }
+    }
 
+    // Fire all pairwise prediction requests in parallel instead of serially.
+    const results = await Promise.all(
+      pairs.map(async ([vesselA, vesselB]) => {
         try {
           const response = await fetch(`${API_BASE}/v1/ais/risk/predict-collision`, {
             method: "POST",
@@ -320,45 +334,35 @@ export function useAISBackend(
             })
           });
 
-          if (!response.ok) continue;
-          const prediction = (await response.json()) as CollisionPrediction;
-          predictions.push(prediction);
+          if (!response.ok) return null;
+          return (await response.json()) as CollisionPrediction;
         } catch {
-          // Continue with remaining pairs.
+          return null;
         }
-      }
-    }
+      })
+    );
 
-    setCollisionAlerts(predictions);
+    setCollisionAlerts(results.filter((prediction): prediction is CollisionPrediction => prediction !== null));
   }, []);
 
-  const vesselPositions: VesselPosition[] = smoothedVessels.map((vessel) => ({
-    id: vessel.mmsi,
-    name: vessel.name || `Vessel ${vessel.mmsi.slice(-4)}`,
-    x: vessel.longitude != null ? ((vessel.longitude + 180) / 360) * 100 : 50,
-    y: vessel.latitude != null ? ((vessel.latitude + 90) / 180) * 100 : 50,
-    status: mapNavStatusToVesselStatus(vessel.navigationalStatus ?? null, vessel.speedOverGround ?? null),
-    heading: vessel.heading || vessel.courseOverGround || 0,
-    speed: vessel.speedOverGround || 0,
-    tripPhase: vessel.status,
-    lastCheckin: new Date(vessel.timestamp).toLocaleTimeString()
-  }));
+  const mapRegion = boundingBoxToRegion(boundingBox);
 
-  const fetchNearby = useCallback(async (lat: number, lon: number, radius: number) => {
-    try {
-      const query = queryString({ lat, lon, radius });
-      const response = await fetch(`${API_BASE}/v1/ais/nearby?${query}`, {
-        headers: getAuthHeaders()
-      });
-      if (!response.ok) {
-        throw new Error(`Nearby vessel fetch failed (${response.status})`);
-      }
-      const data = (await response.json()) as AISVesselResponse;
-      return data.vessels ?? [];
-    } catch {
-      return [];
-    }
-  }, []);
+  const vesselPositions: VesselPosition[] = smoothedVessels
+    .filter((vessel) => vessel.latitude != null && vessel.longitude != null)
+    .map((vessel) => {
+      const { x, y } = projectToMap(vessel.latitude as number, vessel.longitude as number, mapRegion);
+      return {
+        id: vessel.mmsi,
+        name: vessel.name || `Vessel ${vessel.mmsi.slice(-4)}`,
+        x,
+        y,
+        status: mapNavStatusToVesselStatus(vessel.navigationalStatus ?? null, vessel.speedOverGround ?? null),
+        heading: vessel.heading || vessel.courseOverGround || 0,
+        speed: vessel.speedOverGround || 0,
+        tripPhase: vessel.status,
+        lastCheckin: new Date(vessel.timestamp).toLocaleTimeString()
+      };
+    });
 
   return {
     vessels: smoothedVessels,
@@ -372,7 +376,6 @@ export function useAISBackend(
     assessRisks,
     getRecommendations,
     predictCollisions,
-    fetchNearby,
     reconnect: fetchVessels
   };
 }
@@ -389,16 +392,4 @@ function mapNavStatusToVesselStatus(
     return "ACTIVE";
   }
   return "ACTIVE";
-}
-
-export function getVesselTypeName(type?: number): string {
-  const types: Record<number, string> = {
-    0: "Unknown",
-    30: "Fishing",
-    31: "Towing",
-    33: "Dredging",
-    35: "Diving",
-    50: "Pilot"
-  };
-  return types[type ?? 0] || "Unknown";
 }

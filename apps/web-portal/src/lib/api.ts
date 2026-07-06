@@ -165,31 +165,6 @@ export async function listIntegrations(type?: string) {
   return res.json();
 }
 
-export async function upsertIntegration(input: {
-  integration_id: string;
-  integration_type: string;
-  provider: string;
-  enabled: boolean;
-  config_json: Record<string, unknown>;
-}) {
-  const res = await fetch(`${base}/v1/integrations/configs/upsert`, {
-    method: "POST",
-    headers: authHeader,
-    body: JSON.stringify(input)
-  });
-  if (!res.ok) throw new Error("Integration upsert failed");
-  return res.json();
-}
-
-export async function testIntegration(integrationId: string) {
-  const res = await fetch(`${base}/v1/integrations/configs/${pathSegment(integrationId)}/test`, {
-    method: "POST",
-    headers: authHeader
-  });
-  if (!res.ok) throw new Error("Integration test failed");
-  return res.json();
-}
-
 export async function listRulesets(mode?: string) {
   const query = queryString({ mode });
   const res = await fetch(`${base}/v1/rules/all${query}`, {
@@ -279,16 +254,6 @@ export async function getHazards(scope?: string) {
   return res.json();
 }
 
-// Export API endpoint for historical data
-export async function getHistoricalMetrics(metricType: string, days = 30) {
-  const query = queryString({ hours: boundedInteger(days * 24, 1, 168) });
-  const res = await fetch(`${base}/v1/sync/metrics/summary${query}`, {
-    headers: { Authorization: authHeader.Authorization }
-  });
-  if (!res.ok) throw new Error("Historical metrics failed");
-  return res.json();
-}
-
 export async function listAuditEvents(limit = 25) {
   const query = queryString({ limit: boundedInteger(limit, 1, 500) });
   const res = await fetch(`${base}/v1/audit/events${query}`, {
@@ -359,9 +324,9 @@ export interface TripsResponse {
     mode: string;
     owner_id: string;
     status: string;
-    started_at: string;
-    ended_at: string;
-    location_name: string;
+    started_at: string | null;
+    ended_at: string | null;
+    location_name: string | null;
     completion_meter: number;
     compliance_open_issues: number;
     latest_risk_tier: string;
@@ -383,11 +348,11 @@ export interface TripStateResponse {
     updated_at: string;
   }>;
   hazards: Record<string, unknown>;
+  // Server returns errors/warnings (no `issues` field); see api/src/services/compliance.ts.
   compliance: {
     completion_meter: number;
-    issues: Array<{ code: string; severity: string; message: string }>;
-    errors: Array<{ code: string; message: string }>;
-    warnings: Array<{ code: string; message: string }>;
+    errors: Array<{ code: string; severity: "error" | "warning"; message: string; fix_hint?: string }>;
+    warnings: Array<{ code: string; severity: "error" | "warning"; message: string; fix_hint?: string }>;
   };
 }
 

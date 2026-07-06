@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  getDashboard,
   getGearForTrip,
   getHazards,
   listDevices,
@@ -17,10 +16,13 @@ import {
   type TripStateResponse,
   type OpenIncidentsResponse
 } from "../lib/api";
+import { projectToMap } from "../lib/geo";
 import type { VesselPosition, RiskZone, GearItem, SyncNode, TripPhase, ComplianceCheckpoint } from "../components/charts";
 
 interface UseFleetDataResult {
   vessels: VesselPosition[];
+  /** True when some plotted positions were synthesized (no geo data available). */
+  approximate: boolean;
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -28,22 +30,28 @@ interface UseFleetDataResult {
 
 /**
  * Hook to fetch fleet data for the tactical map
- * Aggregates trip state + device data to show vessel positions
+ * Aggregates trip state + gear data to show vessel positions
  */
 export function useFleetData(tripId?: string, refreshInterval = 30000): UseFleetDataResult {
   const [vessels, setVessels] = useState<VesselPosition[]>([]);
+  const [approximate, setApproximate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const seqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const lastTripIdRef = useRef(tripId);
 
   const fetchData = useCallback(async () => {
-    if (abortRef.current) {
-      abortRef.current.abort();
+    const seq = ++seqRef.current;
+    // A trip switch is a fresh load: show the loading state again instead of
+    // presenting the previous trip's data as current.
+    if (tripId !== lastTripIdRef.current) {
+      lastTripIdRef.current = tripId;
+      hasLoadedRef.current = false;
     }
-    abortRef.current = new AbortController();
-
-    setLoading(true);
-    setError(null);
+    // Only surface the loading state before the first successful fetch so
+    // background polls don't flicker "Loading..." over live data.
+    if (!hasLoadedRef.current) setLoading(true);
 
     try {
       // Get all trips as vessels
@@ -52,31 +60,41 @@ export function useFleetData(tripId?: string, refreshInterval = 30000): UseFleet
 
       // For detailed vessel positions, try to get trip state if tripId provided
       let detailedVessels: VesselPosition[] = [];
+      let syntheticPositionUsed = false;
 
       if (tripId) {
         try {
           const tripState = await getTripState(tripId) as TripStateResponse;
           // Convert trip gear to vessel positions if geo data exists
           if (tripState.gear) {
-            detailedVessels = tripState.gear.map((gear: { gear_id: string; last_position?: { lat?: number; lon?: number }; status: string; updated_at: string }, idx: number) => ({
-              id: gear.gear_id,
-              name: gear.gear_id,
-              x: gear.last_position?.lat ? ((gear.last_position.lat + 90) / 180) * 100 : 20 + idx * 15,
-              y: gear.last_position?.lon ? ((gear.last_position.lon + 180) / 360) * 100 : 20 + idx * 10,
-              status: gear.status as VesselPosition["status"],
-              heading: 0,
-              speed: gear.status === "DEPLOYED" ? 0 : gear.status === "HAULED" ? 0.5 : 0,
-              tripPhase: gear.status as string,
-              lastCheckin: new Date(gear.updated_at).toLocaleTimeString()
-            }));
+            detailedVessels = tripState.gear.map((gear, idx) => {
+              const lat = gear.last_position?.lat;
+              const lon = gear.last_position?.lon;
+              const hasPosition = lat != null && lon != null;
+              if (!hasPosition) syntheticPositionUsed = true;
+              const projected = hasPosition ? projectToMap(lat, lon) : { x: 20 + idx * 15, y: 20 + idx * 10 };
+              return {
+                id: gear.gear_id,
+                name: gear.gear_id,
+                x: projected.x,
+                y: projected.y,
+                status: mapGearStatusToVesselStatus(gear.status),
+                heading: 0,
+                speed: gear.status === "DEPLOYED" ? 0 : gear.status === "HAULED" ? 0.5 : 0,
+                tripPhase: gear.status,
+                lastCheckin: new Date(gear.updated_at).toLocaleTimeString()
+              };
+            });
           }
         } catch {
           // Leave detailed vessel data empty when trip detail lookup fails.
         }
       }
 
-      // Convert trips to vessels with positions
-      const vesselData: VesselPosition[] = tripRows.map((trip: TripsResponse["trips"][0], idx: number) => ({
+      // Convert trips to vessels; trip rows carry no geo data, so these
+      // positions come from a synthetic fallback grid.
+      if (tripRows.length > 0) syntheticPositionUsed = true;
+      const vesselData: VesselPosition[] = tripRows.map((trip, idx) => ({
         id: trip.trip_id,
         name: `Vessel ${trip.trip_id.slice(-4)}`,
         x: 10 + (idx % 5) * 18,
@@ -95,13 +113,19 @@ export function useFleetData(tripId?: string, refreshInterval = 30000): UseFleet
         ? [...detailedVessels, ...vesselData.filter(v => !detailedVessels.find(d => d.id === v.id))]
         : vesselData;
 
+      // Drop stale responses that resolve after a newer request started.
+      if (seq !== seqRef.current) return;
+      hasLoadedRef.current = true;
       setVessels(merged);
+      setApproximate(syntheticPositionUsed);
+      setError(null);
     } catch (err) {
-      if (err instanceof Error && err.name !== "AbortError") {
-        setError(err.message);
-      }
+      if (seq !== seqRef.current) return;
+      setError(err instanceof Error ? err.message : "Failed to load fleet data");
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
     }
   }, [tripId]);
 
@@ -110,14 +134,11 @@ export function useFleetData(tripId?: string, refreshInterval = 30000): UseFleet
 
     if (refreshInterval > 0) {
       const interval = setInterval(fetchData, refreshInterval);
-      return () => {
-        clearInterval(interval);
-        abortRef.current?.abort();
-      };
+      return () => clearInterval(interval);
     }
   }, [fetchData, refreshInterval]);
 
-  return { vessels, loading, error, refetch: fetchData };
+  return { vessels, approximate, loading, error, refetch: fetchData };
 }
 
 /**
@@ -127,9 +148,12 @@ export function useRiskData(refreshInterval = 60000) {
   const [zones, setZones] = useState<RiskZone[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    const seq = ++seqRef.current;
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const [hazards, incidents] = await Promise.all([
         getHazards() as Promise<HazardsResponse>,
@@ -137,16 +161,21 @@ export function useRiskData(refreshInterval = 60000) {
       ]);
 
       // Convert hazards to risk zones
-      const hazardZones: RiskZone[] = (hazards.hazards || []).map((h: HazardsResponse["hazards"][0], idx: number) => ({
-        x: h.location?.lat ? ((h.location.lat + 90) / 180) * 100 : 20 + idx * 20,
-        y: h.location?.lon ? ((h.location.lon + 180) / 360) * 100 : 20 + idx * 15,
-        radius: 15 + h.severity * 5,
-        severity: mapSeverityToRiskLevel(h.severity),
-        label: h.type || "Hazard"
-      }));
+      const hazardZones: RiskZone[] = (hazards.hazards || []).map((h, idx) => {
+        const lat = h.location?.lat;
+        const lon = h.location?.lon;
+        const projected = lat != null && lon != null ? projectToMap(lat, lon) : { x: 20 + idx * 20, y: 20 + idx * 15 };
+        return {
+          x: projected.x,
+          y: projected.y,
+          radius: 15 + h.severity * 5,
+          severity: mapSeverityToRiskLevel(h.severity),
+          label: h.type || "Hazard"
+        };
+      });
 
       // Add incident zones
-      const incidentZones: RiskZone[] = (incidents.incidents || []).slice(0, 5).map((inc: OpenIncidentsResponse["incidents"][0], idx: number) => ({
+      const incidentZones: RiskZone[] = (incidents.incidents || []).slice(0, 5).map((inc, idx) => ({
         x: 30 + idx * 15,
         y: 40 + idx * 10,
         radius: 20 + inc.severity * 8,
@@ -154,11 +183,17 @@ export function useRiskData(refreshInterval = 60000) {
         label: inc.category
       }));
 
+      if (seq !== seqRef.current) return;
+      hasLoadedRef.current = true;
       setZones([...hazardZones, ...incidentZones]);
+      setError(null);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load risk data");
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -180,33 +215,53 @@ export function useGearData(tripId?: string, refreshInterval = 30000) {
   const [items, setItems] = useState<GearItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const lastTripIdRef = useRef(tripId);
 
   const fetchData = useCallback(async () => {
+    const seq = ++seqRef.current;
+    if (tripId !== lastTripIdRef.current) {
+      // Trip switch: clear the previous trip's gear so it isn't shown as
+      // current while the new trip loads.
+      lastTripIdRef.current = tripId;
+      hasLoadedRef.current = false;
+      setItems([]);
+    }
     if (!tripId) {
+      hasLoadedRef.current = false;
+      setItems([]);
+      setError(null);
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const data = await getGearForTrip(tripId) as GearForTripResponse;
 
-      const gearItems: GearItem[] = (data.gear || []).map((g: GearForTripResponse["gear"][0]) => ({
+      const gearItems: GearItem[] = (data.gear || []).map((g) => ({
         id: g.gear_id,
         name: g.buoy_label || g.station_id || g.gear_id,
         status: mapGearStatus(g.status),
         health: calculateGearHealth(g.status, g.updated_at),
         lastSweep: new Date(g.updated_at),
-        location: g.last_position
-          ? `${g.last_position.lat?.toFixed(2) ?? "?"}, ${g.last_position.lon?.toFixed(2) ?? "?"}`
+        location: g.last_position && g.last_position.lat != null && g.last_position.lon != null
+          ? `${g.last_position.lat.toFixed(2)}, ${g.last_position.lon.toFixed(2)}`
           : (data.mode === "OFFSHORE" ? g.buoy_label : g.station_id) || "Unknown"
       }));
 
+      if (seq !== seqRef.current) return;
+      hasLoadedRef.current = true;
       setItems(gearItems);
+      setError(null);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load gear data");
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
     }
   }, [tripId]);
 
@@ -229,6 +284,8 @@ export function useSyncData(refreshInterval = 15000) {
   const [metrics, setMetrics] = useState<SyncMetricsResponse["metrics"]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
   function formatNodeName(subjectType: string, index: number) {
     if (subjectType === "VESSEL") return index === 0 ? "Vessel station" : `Vessel station ${index + 1}`;
@@ -238,7 +295,8 @@ export function useSyncData(refreshInterval = 15000) {
   }
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    const seq = ++seqRef.current;
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const [devices, metricsData] = await Promise.all([
         listDevices() as Promise<DevicesResponse>,
@@ -246,7 +304,7 @@ export function useSyncData(refreshInterval = 15000) {
       ]);
 
       // Convert devices to sync nodes
-      const syncNodes: SyncNode[] = (devices.devices || []).map((d: DevicesResponse["devices"][0], index: number) => ({
+      const syncNodes: SyncNode[] = (devices.devices || []).map((d, index) => ({
         id: d.device_id,
         name: formatNodeName(d.subject_type, index),
         status: d.revoked ? "OFFLINE" : "ONLINE",
@@ -255,12 +313,18 @@ export function useSyncData(refreshInterval = 15000) {
         queueDepth: 0
       }));
 
+      if (seq !== seqRef.current) return;
+      hasLoadedRef.current = true;
       setNodes(syncNodes);
       setMetrics(metricsData.metrics || []);
+      setError(null);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load sync data");
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -282,14 +346,26 @@ export function useTripTimelineData(tripId?: string) {
   const [phases, setPhases] = useState<TripPhase[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const lastTripIdRef = useRef(tripId);
 
   const fetchData = useCallback(async () => {
+    const seq = ++seqRef.current;
+    if (tripId !== lastTripIdRef.current) {
+      lastTripIdRef.current = tripId;
+      hasLoadedRef.current = false;
+      setPhases([]);
+    }
     if (!tripId) {
+      hasLoadedRef.current = false;
+      setPhases([]);
+      setError(null);
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const [timeline, state] = await Promise.all([
         getTripTimeline(tripId, 100) as Promise<{ count: number; timeline: Array<{ event_type: string; ts_device: string; payload_json: unknown }> }>,
@@ -297,7 +373,7 @@ export function useTripTimelineData(tripId?: string) {
       ]);
 
       // Build phases directly from observed timeline events.
-      const phases: TripPhase[] = [];
+      const nextPhases: TripPhase[] = [];
       const status = state.trip?.status || "PLANNED";
       const isActive = status === "ACTIVE";
 
@@ -309,23 +385,26 @@ export function useTripTimelineData(tripId?: string) {
         const lastTime = lastEvent ? new Date(lastEvent.ts_device) : new Date(firstTime.getTime() + 60000);
         const safeEndTime = lastTime.getTime() > firstTime.getTime() ? lastTime : new Date(firstTime.getTime() + 60000);
 
-        phases.push({
+        nextPhases.push({
           name: "Observed Activity",
           start: firstTime,
           end: safeEndTime,
           status: isActive ? "ACTIVE" : "COMPLETE",
           progress: isActive ? Math.min(99, Math.max(1, Math.round((timeline.count / 200) * 100))) : 100
         });
-      } else {
-        setPhases([]);
-        return;
       }
 
-      setPhases(phases);
+      if (seq !== seqRef.current) return;
+      hasLoadedRef.current = true;
+      setPhases(nextPhases);
+      setError(null);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load timeline");
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
     }
   }, [tripId]);
 
@@ -343,14 +422,26 @@ export function useComplianceData(tripId?: string) {
   const [checkpoints, setCheckpoints] = useState<ComplianceCheckpoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const lastTripIdRef = useRef(tripId);
 
   const fetchData = useCallback(async () => {
+    const seq = ++seqRef.current;
+    if (tripId !== lastTripIdRef.current) {
+      lastTripIdRef.current = tripId;
+      hasLoadedRef.current = false;
+      setCheckpoints([]);
+    }
     if (!tripId) {
+      hasLoadedRef.current = false;
+      setCheckpoints([]);
+      setError(null);
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const state = await getTripState(tripId) as TripStateResponse;
 
@@ -363,18 +454,24 @@ export function useComplianceData(tripId?: string) {
         { name: "Trip Report", completed: compliance.completion_meter >= 90, required: true }
       ];
 
-      // Add any validation errors as incomplete checkpoints
-      const errorCheckpoints = (compliance.issues || []).map((issue: { code: string; message: string }) => ({
+      // Add validation errors and warnings as incomplete checkpoints
+      const issueCheckpoints = [...(compliance.errors ?? []), ...(compliance.warnings ?? [])].map((issue) => ({
         name: issue.message || issue.code,
         completed: false,
-        required: true
+        required: issue.severity === "error"
       }));
 
-      setCheckpoints([...baseCheckpoints, ...errorCheckpoints]);
+      if (seq !== seqRef.current) return;
+      hasLoadedRef.current = true;
+      setCheckpoints([...baseCheckpoints, ...issueCheckpoints]);
+      setError(null);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load compliance data");
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
     }
   }, [tripId]);
 
@@ -396,6 +493,29 @@ function mapTripStatusToVesselStatus(status: string): VesselPosition["status"] {
   }
 }
 
+/**
+ * Gear rows carry gear lifecycle statuses (SET/CHECKED/HAULED/...), not vessel
+ * statuses, so map them explicitly instead of casting into the vessel union.
+ */
+function mapGearStatusToVesselStatus(status: string): VesselPosition["status"] {
+  switch (status) {
+    case "REGISTERED":
+      return "TRANSIT";
+    case "SET":
+    case "CHECKED":
+      return "FISHING";
+    case "HAULED":
+    case "RECOVERED":
+      return "ACTIVE";
+    case "REMOVED":
+      return "DOCKED";
+    case "MISSING":
+      return "MAINTENANCE";
+    default:
+      return "ACTIVE";
+  }
+}
+
 function mapSeverityToRiskLevel(severity: number): RiskZone["severity"] {
   if (severity <= 2) return "LOW";
   if (severity <= 3) return "MODERATE";
@@ -405,6 +525,7 @@ function mapSeverityToRiskLevel(severity: number): RiskZone["severity"] {
 
 function mapGearStatus(status: string): GearItem["status"] {
   const statusMap: Record<string, GearItem["status"]> = {
+    REGISTERED: "DEPLOYED",
     SET: "DEPLOYED",
     CHECKED: "DEPLOYED",
     HAULED: "RETRIEVED",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   createLot,
   generateComplianceExport,
@@ -21,7 +21,13 @@ import {
   verifyCertificate,
   type AuditEventsResponse
 } from "./lib/api";
-import { queuePendingAction, readPendingActions } from "./lib/offline";
+import {
+  clearPendingAction,
+  clearPendingActions,
+  queuePendingAction,
+  readPendingActions,
+  type PendingAction
+} from "./lib/offline";
 import type { KpiCard } from "./types";
 import {
   BarChart,
@@ -45,7 +51,6 @@ import {
 } from "./hooks/useVisualizationData";
 import { useMobileDetect, useChartExport } from "./hooks/useResizeObserver";
 import { RealTimeFleetAI } from "./components/RealTimeFleetAI";
-import { LLMUsageDashboard } from "./components/LLMUsageDashboard";
 import {
   Button,
   Card,
@@ -53,28 +58,22 @@ import {
   CardTitle,
   CardDescription,
   CardContent,
-  CardFooter,
+  ConfirmModal,
   Input,
   Textarea,
+  Select,
   Badge,
   StatusBadge,
   RiskBadge,
-  Spinner,
-  StatusIndicator,
-  ConnectionStatus,
-  SyncIndicator,
   AppShell,
   PageHeader,
   Section,
   Grid,
   Stack,
-  Divider,
-  Navigation,
-  Breadcrumbs,
   Icon,
   IconButton,
   ActivityList,
-  List,
+  useToast,
 } from "@northline/ui";
 import "@northline/ui/styles.css";
 
@@ -89,7 +88,12 @@ interface TripLookupData {
   trip: { status: string; mode: string } | null;
   gear: Array<{ gear_id: string; status: string }>;
   hazards: Record<string, unknown>;
-  compliance: { completion_meter: number; issues: Array<{ code: string; severity: string; message: string }> };
+  // The server returns errors/warnings (no `issues` field).
+  compliance: {
+    completion_meter: number;
+    errors: Array<{ code: string; severity: string; message: string }>;
+    warnings: Array<{ code: string; severity: string; message: string }>;
+  };
 }
 
 interface CertificateVerifyData {
@@ -221,12 +225,29 @@ const defaultDashboard: DashboardData = {
 const WORKSPACE_PRESETS_KEY = "northline.webportal.workspace_presets";
 const ACTIVITY_LOG_KEY = "northline.webportal.activity_log";
 
+// Hoisted so RealTimeFleetAI receives stable prop references; inline array
+// literals would re-create props each render and churn its fetch intervals.
+const FLEET_BOUNDING_BOX: [[number, number], [number, number]] = [[-170, 50], [-130, 70]]; // Bering Sea
+const WEATHER_POSITION: [number, number] = [55, -165]; // Dutch Harbor area
+
 function readJsonStorage<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as unknown;
+    // Validate the parsed shape: the callers store arrays, so reject anything else.
+    if (Array.isArray(fallback) && !Array.isArray(parsed)) return fallback;
+    return parsed as T;
   } catch {
     return fallback;
+  }
+}
+
+function writeJsonStorage(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage may be unavailable (private mode, quota); state stays in memory.
   }
 }
 
@@ -244,10 +265,10 @@ export function App() {
   const [riskError, setRiskError] = useState<string | null>(null);
   const [openIncidents, setOpenIncidents] = useState<OpenIncident[]>([]);
   const [tripRows, setTripRows] = useState<TripRow[]>([]);
-  const [timelineCount, setTimelineCount] = useState<number | null>(null);
   const [lotId, setLotId] = useState("");
   const [lotActionResult, setLotActionResult] = useState<string | null>(null);
-  const [pendingCount, setPendingCount] = useState(() => readPendingActions().length);
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>(() => readPendingActions());
+  const [showPendingActions, setShowPendingActions] = useState(false);
   const [integrations, setIntegrations] = useState<Array<{ integration_id: string; integration_type: string; enabled: boolean }>>([]);
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [syncMetrics, setSyncMetrics] = useState<Array<{ metric_name: string; avg_value: number; samples: number }> | null>(null);
@@ -279,9 +300,49 @@ export function App() {
   });
   const [rulesetActionResult, setRulesetActionResult] = useState<string | null>(null);
   const [closeoutResult, setCloseoutResult] = useState<string | null>(null);
+  // Per-step closeout completion, tracked explicitly instead of substring
+  // matching the lotActionResult message.
+  const [closeoutFlags, setCloseoutFlags] = useState({
+    lotCreated: false,
+    complianceSigned: false,
+    exportGenerated: false
+  });
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    variant?: "default" | "danger";
+    action: () => void | Promise<void>;
+  } | null>(null);
+  // Busy-state per action key: disables buttons in flight to prevent duplicate mutations.
+  const [busyActions, setBusyActions] = useState<Record<string, boolean>>({});
+  const inFlightRef = useRef<Set<string>>(new Set());
+
+  const {
+    success: toastSuccess,
+    error: toastError,
+    warning: toastWarning,
+    info: toastInfo,
+    container: toastContainer
+  } = useToast();
+
+  const isBusy = useCallback((key: string) => Boolean(busyActions[key]), [busyActions]);
+
+  const runAction = useCallback(async (key: string, fn: () => Promise<unknown> | unknown): Promise<boolean> => {
+    if (inFlightRef.current.has(key)) return false;
+    inFlightRef.current.add(key);
+    setBusyActions((previous) => ({ ...previous, [key]: true }));
+    try {
+      await fn();
+      return true;
+    } finally {
+      inFlightRef.current.delete(key);
+      setBusyActions((previous) => ({ ...previous, [key]: false }));
+    }
+  }, []);
 
   // Live data hooks for visualizations
-  const { vessels: liveVessels, loading: vesselsLoading, error: vesselsError, refetch: refetchVessels } = useFleetData(tripId || undefined, 30000);
+  const { vessels: liveVessels, approximate: vesselsApproximate, loading: vesselsLoading, error: vesselsError, refetch: refetchVessels } = useFleetData(tripId || undefined, 30000);
   const { zones: liveRiskZones, loading: riskLoading, error: riskError2, refetch: refetchRisk } = useRiskData(60000);
   const { items: liveGearItems, loading: gearLoading, error: gearError, refetch: refetchGear } = useGearData(tripId || undefined, 30000);
   const { nodes: liveSyncNodes, loading: syncLoading, error: syncError, refetch: refetchSync } = useSyncData(15000);
@@ -291,8 +352,28 @@ export function App() {
   // Mobile detection for responsive sizing
   const { isMobile, isTablet } = useMobileDetect();
 
-  // Export functionality
+  // Export functionality: each exportable chart gets its own container ref so
+  // exports never grab the wrong SVG via document-wide selectors.
   const { exportToPNG } = useChartExport();
+  const fleetMapRef = useRef<HTMLDivElement>(null);
+  const riskHeatmapRef = useRef<HTMLDivElement>(null);
+  const tripTimelineRef = useRef<HTMLDivElement>(null);
+  const syncHealthRef = useRef<HTMLDivElement>(null);
+
+  const handleExportChart = useCallback(async (container: HTMLDivElement | null, filenamePrefix: string) => {
+    const svg = container?.querySelector("svg");
+    if (!svg) {
+      toastError("Export failed", "Chart is not ready to export yet.");
+      return;
+    }
+    const filename = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.png`;
+    try {
+      await exportToPNG(svg, filename);
+      toastSuccess("Chart exported", filename);
+    } catch {
+      toastError("Export failed", "The chart could not be rendered to PNG.");
+    }
+  }, [exportToPNG, toastSuccess, toastError]);
 
   useEffect(() => {
     let mounted = true;
@@ -315,6 +396,9 @@ export function App() {
     };
   }, []);
 
+  // Load initial trips exactly once on mount. Functional updates only fill the
+  // trip/lot inputs when they are still empty, so a user's typed (or cleared)
+  // value is never clobbered by a late response.
   useEffect(() => {
     let mounted = true;
 
@@ -325,12 +409,10 @@ export function App() {
         if (!mounted) return;
 
         setTripRows(rows.slice(0, 6));
-        if (!tripId && rows[0]?.trip_id) {
-          const nextTripId = rows[0].trip_id;
-          setTripId(nextTripId);
-          if (!lotId) {
-            setLotId(`lot_${nextTripId}`);
-          }
+        const firstTripId = rows[0]?.trip_id;
+        if (firstTripId) {
+          setTripId((current) => current || firstTripId);
+          setLotId((current) => current || `lot_${firstTripId}`);
         }
       } catch {
         if (!mounted) return;
@@ -342,7 +424,12 @@ export function App() {
     return () => {
       mounted = false;
     };
-  }, [tripId, lotId]);
+  }, []);
+
+  // A different trip means the closeout steps have to be redone.
+  useEffect(() => {
+    setCloseoutFlags({ lotCreated: false, complianceSigned: false, exportGenerated: false });
+  }, [tripId]);
 
   const addActivity = useCallback((message: string, tone: ActivityLogItem["tone"] = "info") => {
     setActivityLog((previous) =>
@@ -351,11 +438,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(WORKSPACE_PRESETS_KEY, JSON.stringify(workspacePresets));
+    writeJsonStorage(WORKSPACE_PRESETS_KEY, workspacePresets);
   }, [workspacePresets]);
 
   useEffect(() => {
-    localStorage.setItem(ACTIVITY_LOG_KEY, JSON.stringify(activityLog));
+    writeJsonStorage(ACTIVITY_LOG_KEY, activityLog);
   }, [activityLog]);
 
   const cards: KpiCard[] = useMemo(
@@ -372,49 +459,80 @@ export function App() {
     [dashboard]
   );
 
-  async function handleTripLookup() {
+  async function handleTripLookup(): Promise<boolean> {
     if (!tripId.trim()) {
       setTripError("Trip id is required.");
-      return;
+      return false;
     }
     try {
       const data = (await getTripState(tripId)) as TripLookupData;
       setTripState(data);
       setTripError(null);
       addActivity(`Loaded trip state for ${formatTripLabel(tripId)}.`, "success");
+      toastSuccess("Trip state loaded", formatTripLabel(tripId));
+      return true;
     } catch {
       setTripState(null);
       setTripError("Trip state unavailable for that id.");
       addActivity(`Trip lookup failed for ${formatTripLabel(tripId)}.`, "danger");
+      toastError("Trip lookup failed", "Trip state unavailable for that id.");
+      return false;
     }
   }
 
-  async function handleVerifyCertificate() {
+  async function handleVerifyCertificate(): Promise<boolean> {
     if (!certificateId.trim()) {
       setCertificateError("Certificate id is required.");
-      return;
+      return false;
     }
     try {
       const data = (await verifyCertificate(certificateId)) as CertificateVerifyData;
       setCertificateResult(data);
       setCertificateError(null);
       addActivity(`Verified ${formatCertificateLabel(certificateId)}.`, "success");
+      toastSuccess("Certificate verified", formatCertificateLabel(certificateId));
+      return true;
     } catch {
       setCertificateResult(null);
       setCertificateError("Certificate not found or unavailable in this workspace.");
       addActivity(`${formatCertificateLabel(certificateId)} verification failed.`, "warning");
+      toastError("Verification failed", "Certificate not found or unavailable.");
+      return false;
     }
   }
 
+  function refreshPendingActions() {
+    setPendingActions(readPendingActions());
+  }
+
   function handleQueueOfflineLookup() {
+    if (!tripId.trim()) {
+      setTripError("Enter a trip id before queueing an offline lookup.");
+      toastWarning("Nothing queued", "Enter a trip id before queueing an offline lookup.");
+      return;
+    }
     queuePendingAction({
       id: crypto.randomUUID(),
       action: "OPEN_TRIP",
-      payload: { tripId },
+      payload: { tripId: tripId.trim() },
       createdAt: new Date().toISOString()
     });
-    setPendingCount(readPendingActions().length);
+    refreshPendingActions();
     addActivity(`Queued offline lookup for ${formatTripLabel(tripId)}.`, "info");
+    toastInfo("Lookup queued", `Offline lookup queued for ${formatTripLabel(tripId)}.`);
+  }
+
+  function handleClearPendingAction(id: string) {
+    clearPendingAction(id);
+    refreshPendingActions();
+    addActivity("Removed one pending offline action.", "info");
+  }
+
+  function handleClearAllPendingActions() {
+    clearPendingActions();
+    refreshPendingActions();
+    addActivity("Cleared the offline action queue.", "warning");
+    toastInfo("Offline queue cleared");
   }
 
   async function handleRiskRefresh() {
@@ -434,16 +552,18 @@ export function App() {
       setOpenIncidents(((incidents as { incidents?: OpenIncident[] }).incidents ?? []).slice(0, 3));
       setRiskError(null);
       addActivity("Risk monitor refreshed.", "success");
+      toastSuccess("Risk monitor refreshed");
     } catch {
       setRiskError("Risk feed unavailable. Retry after connection recovery.");
       addActivity("Risk refresh failed.", "warning");
+      toastError("Risk refresh failed", "Risk feed unavailable.");
     }
   }
 
-  async function handleCreateLot() {
+  async function handleCreateLot(): Promise<boolean> {
     if (!tripId.trim() || !lotId.trim()) {
       setLotActionResult("Trip id and lot id are required.");
-      return;
+      return false;
     }
     try {
       await createLot({
@@ -454,64 +574,79 @@ export function App() {
       });
       const lots = (await listLots()) as { lots?: Array<{ lot_id: string }> };
       setLotActionResult(`Lot ready. Total listed lots: ${(lots.lots ?? []).length}`);
+      setCloseoutFlags((flags) => ({ ...flags, lotCreated: true }));
       addActivity(`Created or refreshed ${formatLotLabel(lotId)}.`, "success");
+      toastSuccess("Lot ready", formatLotLabel(lotId));
+      return true;
     } catch {
       setLotActionResult("Lot creation failed.");
       addActivity(`${formatLotLabel(lotId)} action failed.`, "danger");
+      toastError("Lot creation failed", formatLotLabel(lotId));
+      return false;
     }
   }
 
-  async function handleSignCompliance() {
+  async function handleSignCompliance(): Promise<boolean> {
     if (!tripId.trim()) {
       setLotActionResult("Trip id is required.");
-      return;
+      return false;
     }
     try {
       const pkgId = `pkg_${tripId}`;
       const response = (await signCompliance(tripId, pkgId)) as { compliance?: { completion_meter: number } };
       setLotActionResult(`Compliance signed. Completion meter ${response.compliance?.completion_meter ?? 0}%`);
+      setCloseoutFlags((flags) => ({ ...flags, complianceSigned: true }));
       addActivity(`Signed compliance for ${formatTripLabel(tripId)}.`, "success");
+      toastSuccess("Compliance signed", formatTripLabel(tripId));
+      return true;
     } catch {
       setLotActionResult("Compliance sign-off failed.");
       addActivity(`Compliance sign failed for ${formatTripLabel(tripId)}.`, "danger");
+      toastError("Compliance sign-off failed", formatTripLabel(tripId));
+      return false;
     }
   }
 
-  async function handleExportPackage() {
+  async function handleExportPackage(): Promise<boolean> {
     if (!tripId.trim()) {
       setLotActionResult("Trip id is required.");
-      return;
+      return false;
     }
     try {
       const response = (await generateComplianceExport(tripId)) as { artifact_id?: string };
       setLotActionResult(response.artifact_id ? "Export generated." : "Export generated with pending artifact label.");
+      setCloseoutFlags((flags) => ({ ...flags, exportGenerated: true }));
       addActivity(`Generated export for ${formatTripLabel(tripId)}.`, "success");
+      toastSuccess("Export generated", formatTripLabel(tripId));
+      return true;
     } catch {
       setLotActionResult("Export generation failed.");
       addActivity(`Export failed for ${formatTripLabel(tripId)}.`, "danger");
+      toastError("Export generation failed", formatTripLabel(tripId));
+      return false;
     }
   }
 
   async function handleLoadTimeline() {
     if (!tripId.trim()) {
       addActivity("Set a trip id before loading timeline.", "warning");
+      toastWarning("Timeline not loaded", "Set a trip id first.");
       return;
     }
     try {
-      const [tripsResponse, timelineResponse] = await Promise.all([
+      const [tripsResponse] = await Promise.all([
         listTrips(),
         getTripTimeline(tripId, 120)
       ]);
 
       const trips = (tripsResponse as { trips?: TripRow[] }).trips ?? [];
-      const timeline = timelineResponse as { count?: number };
 
       setTripRows(trips.slice(0, 6));
-      setTimelineCount(timeline.count ?? 0);
       addActivity(`Loaded timeline and trip rows for ${formatTripLabel(tripId)}.`, "success");
+      toastSuccess("Trips loaded", `${trips.length} trips available.`);
     } catch {
-      setTimelineCount(null);
       addActivity("Timeline load failed.", "warning");
+      toastError("Timeline load failed");
     }
   }
 
@@ -595,6 +730,7 @@ export function App() {
     };
     setWorkspacePresets((previous) => [next, ...previous].slice(0, 12));
     addActivity(`Saved workspace preset "${next.name}".`, "success");
+    toastSuccess("Workspace preset saved", next.name);
   }
 
   function handleApplyWorkspace(preset: WorkspacePreset) {
@@ -607,6 +743,7 @@ export function App() {
   function handleDeleteWorkspace(id: string) {
     setWorkspacePresets((previous) => previous.filter((preset) => preset.id !== id));
     addActivity("Deleted workspace preset.", "warning");
+    toastInfo("Workspace preset deleted");
   }
 
   function toggleTripSelection(id: string) {
@@ -633,6 +770,11 @@ export function App() {
 
     setBatchResult(`Compliance signed for ${successCount}/${selectedTripIds.length} selected trips.`);
     addActivity(`Batch compliance run completed (${successCount}/${selectedTripIds.length}).`, successCount ? "success" : "danger");
+    if (successCount === selectedTripIds.length) {
+      toastSuccess("Batch sign complete", `${successCount}/${selectedTripIds.length} trips signed.`);
+    } else {
+      toastWarning("Batch sign finished with failures", `${successCount}/${selectedTripIds.length} trips signed.`);
+    }
   }
 
   async function handleBatchExport() {
@@ -653,6 +795,11 @@ export function App() {
 
     setBatchResult(`Export generated for ${successCount}/${selectedTripIds.length} selected trips.`);
     addActivity(`Batch export run completed (${successCount}/${selectedTripIds.length}).`, successCount ? "success" : "danger");
+    if (successCount === selectedTripIds.length) {
+      toastSuccess("Batch export complete", `${successCount}/${selectedTripIds.length} exports generated.`);
+    } else {
+      toastWarning("Batch export finished with failures", `${successCount}/${selectedTripIds.length} exports generated.`);
+    }
   }
 
   async function handleRegisterAdminDevice() {
@@ -671,16 +818,19 @@ export function App() {
       });
       setAdminResult(`Registered trusted ${formatDeviceLabel(deviceAdmin.subjectType).toLowerCase()}.`);
       addActivity(`Registered trusted device ${deviceAdmin.deviceId}.`, "success");
+      toastSuccess("Device registered", deviceAdmin.deviceId);
       await handleLoadDevices();
     } catch {
       setAdminResult("Device registration failed. Check role, key format, and network state.");
       addActivity(`Device registration failed for ${deviceAdmin.deviceId || "new device"}.`, "danger");
+      toastError("Device registration failed", "Check role, key format, and network state.");
     }
   }
 
   async function handleRevokeAdminDevice(deviceId = deviceAdmin.deviceId) {
     if (!deviceId.trim()) {
       setAdminResult("Select or enter a device id to revoke.");
+      toastWarning("No device selected", "Select or enter a device id to revoke.");
       return;
     }
 
@@ -688,11 +838,30 @@ export function App() {
       await revokeDevice(deviceId.trim());
       setAdminResult(`Revoked ${deviceId.trim()}.`);
       addActivity(`Revoked trusted device ${deviceId.trim()}.`, "warning");
+      toastSuccess("Device revoked", deviceId.trim());
       await handleLoadDevices();
     } catch {
       setAdminResult("Device revocation failed. Check permissions and try again.");
       addActivity(`Device revocation failed for ${deviceId.trim()}.`, "danger");
+      toastError("Device revocation failed", "Check permissions and try again.");
     }
+  }
+
+  function requestRevokeDevice(deviceId = deviceAdmin.deviceId) {
+    if (!deviceId.trim()) {
+      setAdminResult("Select or enter a device id to revoke.");
+      toastWarning("No device selected", "Select or enter a device id to revoke.");
+      return;
+    }
+    setConfirmDialog({
+      title: "Revoke trusted device",
+      message: `Revoke ${deviceId.trim()}? The device can no longer sign or sync until re-registered.`,
+      confirmText: "Revoke",
+      variant: "danger",
+      action: () => {
+        void runAction(`revoke:${deviceId.trim()}`, () => handleRevokeAdminDevice(deviceId));
+      }
+    });
   }
 
   async function handlePublishRulesetDraft() {
@@ -706,7 +875,8 @@ export function App() {
         ruleset_id: rulesetDraft.rulesetId.trim(),
         mode: rulesetDraft.mode,
         region_code: rulesetDraft.regionCode.trim().toUpperCase(),
-        effective_from: new Date().toISOString(),
+        // The API expects a calendar date (YYYY-MM-DD), not a full timestamp.
+        effective_from: new Date().toISOString().slice(0, 10),
         priority: rulesetDraft.priority,
         rules_json: {
           source: "portal_policy_console",
@@ -719,25 +889,93 @@ export function App() {
       });
       setRulesetActionResult(`Published ${formatRulesetLabel(rulesetDraft.rulesetId)}.`);
       addActivity(`Published ruleset ${rulesetDraft.rulesetId}.`, "success");
+      toastSuccess("Ruleset published", formatRulesetLabel(rulesetDraft.rulesetId));
       await handleLoadRulesets();
     } catch {
       setRulesetActionResult("Ruleset publish failed. Check admin role and policy values.");
       addActivity(`Ruleset publish failed for ${rulesetDraft.rulesetId}.`, "danger");
+      toastError("Ruleset publish failed", "Check admin role and policy values.");
     }
+  }
+
+  function requestPublishRulesetDraft() {
+    if (!rulesetDraft.rulesetId.trim() || !rulesetDraft.regionCode.trim()) {
+      setRulesetActionResult("Ruleset id and region are required.");
+      toastWarning("Draft incomplete", "Ruleset id and region are required.");
+      return;
+    }
+    setConfirmDialog({
+      title: "Publish ruleset",
+      message: `Publish ${formatRulesetLabel(rulesetDraft.rulesetId)} for region ${rulesetDraft.regionCode.trim().toUpperCase()}? The policy takes effect immediately for the whole tenant.`,
+      confirmText: "Publish",
+      action: () => {
+        void runAction("ruleset-publish", handlePublishRulesetDraft);
+      }
+    });
+  }
+
+  function requestBatchSignCompliance() {
+    if (!selectedTripIds.length) {
+      setBatchResult("No trips selected.");
+      toastWarning("No trips selected", "Select trips before batch signing.");
+      return;
+    }
+    setConfirmDialog({
+      title: "Batch sign compliance",
+      message: `Sign compliance packages for ${selectedTripIds.length} selected ${selectedTripIds.length === 1 ? "trip" : "trips"}? Sign-offs are recorded in the audit trail.`,
+      confirmText: "Sign all",
+      action: () => {
+        void runAction("batch-sign", handleBatchSignCompliance);
+      }
+    });
+  }
+
+  function requestDeleteWorkspace(preset: WorkspacePreset) {
+    setConfirmDialog({
+      title: "Delete workspace preset",
+      message: `Delete the preset "${preset.name}"? This cannot be undone.`,
+      confirmText: "Delete",
+      variant: "danger",
+      action: () => handleDeleteWorkspace(preset.id)
+    });
   }
 
   async function handleGuidedCloseout() {
     if (!tripId.trim()) {
       setCloseoutResult("Select a trip before running closeout.");
+      toastWarning("Closeout not started", "Select a trip first.");
       return;
     }
 
-    await handleTripLookup();
-    await handleCreateLot();
-    await handleSignCompliance();
-    await handleExportPackage();
-    setCloseoutResult("Closeout run completed. Review warnings, audit events, and generated export status.");
-    addActivity(`Guided closeout run completed for ${formatTripLabel(tripId)}.`, "success");
+    // Run every step and report real outcomes instead of assuming success.
+    const steps: Array<{ name: string; run: () => Promise<boolean> }> = [
+      { name: "trip state", run: handleTripLookup },
+      { name: "trace lot", run: handleCreateLot },
+      { name: "compliance sign", run: handleSignCompliance },
+      { name: "export", run: handleExportPackage }
+    ];
+
+    const failures: string[] = [];
+    for (const step of steps) {
+      const succeeded = await step.run();
+      if (!succeeded) failures.push(step.name);
+    }
+
+    const successCount = steps.length - failures.length;
+    if (failures.length === 0) {
+      setCloseoutResult(`Closeout completed: ${successCount}/${steps.length} steps succeeded.`);
+      addActivity(`Guided closeout completed for ${formatTripLabel(tripId)} (${successCount}/${steps.length}).`, "success");
+      toastSuccess("Closeout complete", `${successCount}/${steps.length} steps succeeded.`);
+    } else {
+      setCloseoutResult(
+        `Closeout finished with issues: ${successCount}/${steps.length} steps succeeded. Failed: ${failures.join(", ")}.`
+      );
+      addActivity(
+        `Guided closeout for ${formatTripLabel(tripId)} finished with failures (${failures.join(", ")}).`,
+        "danger"
+      );
+      toastError("Closeout incomplete", `Failed steps: ${failures.join(", ")}.`);
+    }
   }
 
   // Responsive chart dimensions
@@ -779,7 +1017,8 @@ export function App() {
       LOW: "var(--success)",
       MODERATE: "var(--warning)",
       HIGH: "var(--danger)",
-      CRITICAL: "#ff0040"
+      // Token-derived critical tone, distinct from the HIGH danger color.
+      CRITICAL: "var(--critical)"
     } as const;
 
     return (Object.keys(counts) as Array<keyof typeof counts>)
@@ -791,7 +1030,7 @@ export function App() {
     const complianceMeter = tripState?.compliance?.completion_meter ?? 0;
     return [
       { name: "Trip", status: tripId ? "COMPLETE" : "PENDING", data: formatTripLabel(tripId) },
-      { name: "Lot", status: lotActionResult ? "COMPLETE" : "PENDING", data: formatLotLabel(lotId) },
+      { name: "Lot", status: closeoutFlags.lotCreated ? "COMPLETE" : "PENDING", data: formatLotLabel(lotId) },
       {
         name: "Certificate",
         status: certificateResult?.verified ? "COMPLETE" : "PENDING",
@@ -802,9 +1041,9 @@ export function App() {
         status: complianceMeter >= 100 ? "COMPLETE" : complianceMeter > 0 ? "ACTIVE" : "PENDING",
         data: `${complianceMeter}%`
       },
-      { name: "Export", status: lotActionResult?.includes("Export generated") ? "COMPLETE" : "PENDING" }
+      { name: "Export", status: closeoutFlags.exportGenerated ? "COMPLETE" : "PENDING" }
     ];
-  }, [tripState, tripId, lotActionResult, lotId, certificateResult, certificateId]);
+  }, [tripState, tripId, closeoutFlags, lotId, certificateResult, certificateId]);
 
   const statusTrendData = useMemo(() => {
     const byStatus = tripRows.reduce<Record<string, number>>((acc, row) => {
@@ -826,7 +1065,9 @@ export function App() {
   }, [syncMetrics]);
 
   const closeoutSteps = useMemo<Array<{ id: string; label: string; detail: string; status: CloseoutStepStatus }>>(() => {
-    const issueCount = tripState?.compliance?.issues?.length ?? 0;
+    // Server compliance payload carries errors + warnings (no `issues` field).
+    const issueCount =
+      (tripState?.compliance?.errors?.length ?? 0) + (tripState?.compliance?.warnings?.length ?? 0);
     const completion = tripState?.compliance?.completion_meter ?? 0;
     return [
       {
@@ -839,28 +1080,28 @@ export function App() {
         id: "lot",
         label: "Trace lot",
         detail: lotId.trim() ? `${formatLotLabel(lotId)} selected` : "Create or select a lot id.",
-        status: lotActionResult?.includes("Lot ready") ? "DONE" : lotId.trim() ? "READY" : "BLOCKED"
+        status: closeoutFlags.lotCreated ? "DONE" : lotId.trim() ? "READY" : "BLOCKED"
       },
       {
         id: "issues",
         label: "Compliance blockers",
-        detail: issueCount ? `${issueCount} issue ${issueCount === 1 ? "requires" : "require"} review` : "No loaded blockers.",
+        detail: issueCount ? `${issueCount} issue${issueCount === 1 ? " requires" : "s require"} review` : "No loaded blockers.",
         status: issueCount > 0 ? "BLOCKED" : completion >= 100 ? "DONE" : "READY"
       },
       {
         id: "sign",
         label: "Sign package",
         detail: "Create an auditable sign-off package for the selected trip.",
-        status: lotActionResult?.includes("Compliance signed") ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
+        status: closeoutFlags.complianceSigned ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
       },
       {
         id: "export",
         label: "Generate export",
         detail: "Produce the regulator or processor package artifact.",
-        status: lotActionResult?.includes("Export generated") ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
+        status: closeoutFlags.exportGenerated ? "DONE" : tripId.trim() ? "READY" : "BLOCKED"
       }
     ];
-  }, [tripState, tripId, lotId, lotActionResult]);
+  }, [tripState, tripId, lotId, closeoutFlags]);
 
   const roleWorkflows: Record<RoleView, Array<{ title: string; metric: string; action: string; tone: "info" | "success" | "warning" | "danger" }>> = useMemo(
     () => ({
@@ -911,7 +1152,7 @@ export function App() {
     { id: "cmd-rules", label: "Load Rulesets", run: handleLoadRulesets },
     { id: "cmd-audit", label: "Load Audit Events", run: handleLoadAuditEvents },
     { id: "cmd-closeout", label: "Run Guided Closeout", run: handleGuidedCloseout },
-    { id: "cmd-rules-publish", label: "Publish Ruleset Draft", run: handlePublishRulesetDraft },
+    { id: "cmd-rules-publish", label: "Publish Ruleset Draft", run: requestPublishRulesetDraft },
     { id: "cmd-save", label: "Save Workspace Preset", run: handleSaveWorkspace }
   ];
 
@@ -919,8 +1160,39 @@ export function App() {
     ? commandList.filter((item) => item.label.toLowerCase().includes(commandQuery.trim().toLowerCase()))
     : [];
 
+  function runCommand(command: { id: string; label: string; run: () => void | Promise<unknown> }) {
+    void runAction(`command:${command.id}`, command.run).then((ran) => {
+      if (ran) toastInfo("Ran command", command.label);
+    });
+  }
+
+  const toneLabels: Record<"info" | "success" | "warning" | "danger", string> = {
+    info: "Overview",
+    success: "Healthy",
+    warning: "Attention",
+    danger: "Action needed"
+  };
+
   return (
     <AppShell maxWidth="xl">
+      {/* Toast stack (rendered once near the root) */}
+      {toastContainer}
+
+      {/* Shared confirmation dialog for destructive / high-impact actions */}
+      <ConfirmModal
+        open={confirmDialog !== null}
+        onClose={() => setConfirmDialog(null)}
+        onConfirm={() => {
+          const pending = confirmDialog;
+          setConfirmDialog(null);
+          if (pending) void pending.action();
+        }}
+        title={confirmDialog?.title ?? ""}
+        message={confirmDialog?.message ?? ""}
+        confirmText={confirmDialog?.confirmText ?? "Confirm"}
+        variant={confirmDialog?.variant ?? "default"}
+      />
+
       {/* Header */}
       <PageHeader
         title="Fleet Operations Portal"
@@ -956,8 +1228,10 @@ export function App() {
           {(["OWNER", "CAPTAIN", "COMPLIANCE", "ADMIN"] as RoleView[]).map((role) => (
             <button
               key={role}
+              type="button"
               className={`role-view-button ${roleView === role ? "active" : ""}`}
               onClick={() => setRoleView(role)}
+              aria-pressed={roleView === role}
             >
               <span>{role === "OWNER" ? "Owner" : role === "CAPTAIN" ? "Captain" : role === "COMPLIANCE" ? "Compliance" : "Admin"}</span>
               <small>
@@ -985,7 +1259,7 @@ export function App() {
                     variant={workflow.tone === "danger" ? "danger" : workflow.tone === "warning" ? "warning" : workflow.tone === "success" ? "success" : "info"}
                     size="sm"
                   >
-                    {workflow.tone}
+                    {toneLabels[workflow.tone]}
                   </Badge>
                 </div>
                 <p className="text-sm text-[var(--ink-secondary)] mt-3">{workflow.action}</p>
@@ -1004,16 +1278,36 @@ export function App() {
               <CardTitle>Command Center</CardTitle>
             </CardHeader>
             <CardContent>
-              <Input
-                value={commandQuery}
-                onChange={(e) => setCommandQuery(e.target.value)}
-                placeholder="Type command..."
-                leftIcon={<Icon name="Search" size={16} />}
-              />
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const first = filteredCommands[0];
+                  if (first) {
+                    runCommand(first);
+                  } else {
+                    toastWarning("No matching command", "Refine the search to find a command.");
+                  }
+                }}
+              >
+                <Input
+                  label="Command search"
+                  value={commandQuery}
+                  onChange={(e) => setCommandQuery(e.target.value)}
+                  placeholder="Type command..."
+                  hint="Press Enter to run the first match."
+                  leftIcon={<Icon name="Search" size={16} />}
+                />
+              </form>
               {filteredCommands.length > 0 && (
                 <Stack gap="sm" className="mt-4">
                   {filteredCommands.slice(0, 6).map((command) => (
-                    <Button key={command.id} variant="ghost" size="sm" onClick={() => command.run()}>
+                    <Button
+                      key={command.id}
+                      variant="ghost"
+                      size="sm"
+                      loading={isBusy(`command:${command.id}`)}
+                      onClick={() => runCommand(command)}
+                    >
                       {command.label}
                     </Button>
                   ))}
@@ -1032,6 +1326,7 @@ export function App() {
             </CardHeader>
             <CardContent>
               <Input
+                label="Preset name"
                 value={workspaceName}
                 onChange={(e) => setWorkspaceName(e.target.value)}
                 placeholder="Preset name"
@@ -1047,7 +1342,7 @@ export function App() {
                       </span>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" onClick={() => handleApplyWorkspace(preset)}>Apply</Button>
-                        <IconButton icon="Trash2" label="Delete" size="sm" onClick={() => handleDeleteWorkspace(preset.id)} />
+                        <IconButton icon="Trash2" label={`Delete preset ${preset.name}`} size="sm" onClick={() => requestDeleteWorkspace(preset)} />
                       </div>
                     </div>
                   ))}
@@ -1066,9 +1361,9 @@ export function App() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={handleLoadTimeline}>Load Trips</Button>
-                <Button variant="secondary" size="sm" onClick={handleBatchSignCompliance}>Batch Sign</Button>
-                <Button variant="secondary" size="sm" onClick={handleBatchExport}>Batch Export</Button>
+                <Button size="sm" loading={isBusy("load-trips")} onClick={() => runAction("load-trips", handleLoadTimeline)}>Load Trips</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("batch-sign")} onClick={requestBatchSignCompliance}>Batch Sign</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("batch-export")} onClick={() => runAction("batch-export", handleBatchExport)}>Batch Export</Button>
               </div>
               {batchResult && <p className="text-sm text-[var(--ink-muted)] mt-3">{batchResult}</p>}
               {tripRows.length > 0 && (
@@ -1108,18 +1403,60 @@ export function App() {
               <CardTitle>Trip State Lookup</CardTitle>
             </CardHeader>
             <CardContent>
-              <Input
-                value={tripId}
-                onChange={(e) => setTripId(e.target.value)}
-                placeholder="Enter trip ID..."
-              />
-              <div className="flex gap-2 mt-3">
-                <Button size="sm" onClick={handleTripLookup}>Load</Button>
-                <Button variant="secondary" size="sm" onClick={handleQueueOfflineLookup}>Queue Offline</Button>
-              </div>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runAction("trip-lookup", handleTripLookup);
+                }}
+              >
+                <Input
+                  label="Trip ID"
+                  value={tripId}
+                  onChange={(e) => setTripId(e.target.value)}
+                  placeholder="Enter trip ID..."
+                />
+                <div className="flex gap-2 mt-3">
+                  <Button type="submit" size="sm" loading={isBusy("trip-lookup")}>Load</Button>
+                  <Button variant="secondary" size="sm" onClick={handleQueueOfflineLookup}>Queue Offline</Button>
+                </div>
+              </form>
               <p className="text-xs text-[var(--ink-muted)] mt-3">
-                Pending: <Badge variant="info" size="sm">{pendingCount}</Badge>
+                Pending: <Badge variant="info" size="sm">{pendingActions.length}</Badge>
+                {pendingActions.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-2"
+                    aria-expanded={showPendingActions}
+                    onClick={() => setShowPendingActions((value) => !value)}
+                  >
+                    {showPendingActions ? "Hide" : "Review"}
+                  </Button>
+                )}
               </p>
+              {showPendingActions && pendingActions.length > 0 && (
+                <Stack gap="sm" className="mt-2">
+                  {pendingActions.map((action) => (
+                    <div key={action.id} className="flex items-center justify-between p-2 rounded bg-[var(--bg-secondary)]">
+                      <span className="text-xs">
+                        <strong>{action.action.replace(/_/g, " ")}</strong>
+                        <span className="text-[var(--ink-muted)] ml-2">
+                          {new Date(action.createdAt).toLocaleString()}
+                        </span>
+                      </span>
+                      <IconButton
+                        icon="XCircle"
+                        label="Remove pending action"
+                        size="sm"
+                        onClick={() => handleClearPendingAction(action.id)}
+                      />
+                    </div>
+                  ))}
+                  <Button variant="secondary" size="sm" onClick={handleClearAllPendingActions}>
+                    Clear All Pending
+                  </Button>
+                </Stack>
+              )}
               {tripError && <p className="text-sm text-[var(--danger)] mt-2">{tripError}</p>}
               {tripState && (
                 <Stack gap="sm" className="mt-4">
@@ -1150,12 +1487,20 @@ export function App() {
               <CardTitle>Certificate Verification</CardTitle>
             </CardHeader>
             <CardContent>
-              <Input
-                value={certificateId}
-                onChange={(e) => setCertificateId(e.target.value)}
-                placeholder="Enter certificate ID..."
-              />
-              <Button size="sm" className="mt-3" onClick={handleVerifyCertificate}>Verify</Button>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runAction("verify-certificate", handleVerifyCertificate);
+                }}
+              >
+                <Input
+                  label="Certificate ID"
+                  value={certificateId}
+                  onChange={(e) => setCertificateId(e.target.value)}
+                  placeholder="Enter certificate ID..."
+                />
+                <Button type="submit" size="sm" className="mt-3" loading={isBusy("verify-certificate")}>Verify</Button>
+              </form>
               {certificateError && <p className="text-sm text-[var(--danger)] mt-2">{certificateError}</p>}
               {certificateResult?.verified && certificateResult.certificate && (
                 <Stack gap="sm" className="mt-4">
@@ -1182,20 +1527,23 @@ export function App() {
               <CardTitle>Risk Monitor</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button size="sm" onClick={handleRiskRefresh}>Refresh Risk</Button>
+              <Button size="sm" loading={isBusy("risk-refresh")} onClick={() => runAction("risk-refresh", handleRiskRefresh)}>Refresh Risk</Button>
               {riskError && <p className="text-sm text-[var(--danger)] mt-2">{riskError}</p>}
               {riskResult && (
                 <Stack gap="sm" className="mt-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-[var(--ink-muted)]">Deck Risk:</span>
+                    <span className="text-sm text-[var(--ink-muted)]">Estimated posture score:</span>
                     <RiskBadge tier={riskResult.tier} score={riskResult.score} />
                   </div>
+                  <p className="text-xs text-[var(--ink-muted)]">
+                    Estimate computed from preset workload and weather inputs — not live deck telemetry.
+                  </p>
                   {riskResult.rationale.slice(0, 2).map((line) => (
                     <p key={line} className="text-xs text-[var(--ink-secondary)]">{line}</p>
                   ))}
                 </Stack>
               )}
-              {!riskResult && <p className="text-sm text-[var(--ink-muted)] mt-4">No live risk computation yet.</p>}
+              {!riskResult && <p className="text-sm text-[var(--ink-muted)] mt-4">No risk estimate computed yet.</p>}
 
               <p className="text-xs font-semibold text-[var(--ink-secondary)] mt-4 mb-2">Open Incidents</p>
               <Stack gap="sm">
@@ -1223,15 +1571,16 @@ export function App() {
             </CardHeader>
             <CardContent>
               <Input
+                label="Lot ID"
                 value={lotId}
                 onChange={(e) => setLotId(e.target.value)}
                 placeholder="Enter lot ID..."
               />
               <div className="flex flex-wrap gap-2 mt-3">
-                <Button size="sm" onClick={handleCreateLot}>Create Lot</Button>
-                <Button variant="secondary" size="sm" onClick={handleSignCompliance}>Sign</Button>
-                <Button variant="secondary" size="sm" onClick={handleExportPackage}>Export</Button>
-                <Button variant="success" size="sm" onClick={handleGuidedCloseout}>Run</Button>
+                <Button size="sm" loading={isBusy("create-lot")} onClick={() => runAction("create-lot", handleCreateLot)}>Create Lot</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("sign-compliance")} onClick={() => runAction("sign-compliance", handleSignCompliance)}>Sign</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("export-package")} onClick={() => runAction("export-package", handleExportPackage)}>Export</Button>
+                <Button variant="success" size="sm" loading={isBusy("guided-closeout")} onClick={() => runAction("guided-closeout", handleGuidedCloseout)}>Run</Button>
               </div>
               <Stack gap="sm" className="mt-4">
                 {closeoutSteps.map((step) => (
@@ -1265,9 +1614,9 @@ export function App() {
             </CardHeader>
             <CardContent>
               <div className="flex gap-2">
-                <Button size="sm" onClick={handleLoadIntegrations}>Load Connections</Button>
-                <Button variant="secondary" size="sm" onClick={handleLoadDevices}>Load Devices</Button>
-                <Button variant="secondary" size="sm" onClick={handleLoadSyncMetrics}>Sync Metrics</Button>
+                <Button size="sm" loading={isBusy("load-integrations")} onClick={() => runAction("load-integrations", handleLoadIntegrations)}>Load Connections</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("load-devices")} onClick={() => runAction("load-devices", handleLoadDevices)}>Load Devices</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("load-sync-metrics")} onClick={() => runAction("load-sync-metrics", handleLoadSyncMetrics)}>Sync Metrics</Button>
               </div>
 
               {integrations.length > 0 && (
@@ -1300,7 +1649,7 @@ export function App() {
                         <div className="flex items-center gap-2">
                           <StatusBadge status={dev.revoked ? 'error' : 'synced'}>{dev.revoked ? 'Revoked' : 'Active'}</StatusBadge>
                           {!dev.revoked && (
-                            <IconButton icon="XCircle" label="Revoke device" size="sm" onClick={() => handleRevokeAdminDevice(dev.device_id)} />
+                            <IconButton icon="XCircle" label="Revoke device" size="sm" onClick={() => requestRevokeDevice(dev.device_id)} />
                           )}
                         </div>
                       </div>
@@ -1312,27 +1661,32 @@ export function App() {
               <div className="admin-form mt-4">
                 <p className="text-xs font-semibold text-[var(--ink-secondary)] mb-2">Register Trusted Device</p>
                 <Input
+                  label="Device ID"
                   value={deviceAdmin.deviceId}
                   onChange={(event) => setDeviceAdmin((current) => ({ ...current, deviceId: event.target.value }))}
                   placeholder="Device id"
                 />
                 <div className="admin-inline mt-2">
-                  <select
+                  <Select
+                    label="Subject type"
                     value={deviceAdmin.subjectType}
                     onChange={(event) => setDeviceAdmin((current) => ({ ...current, subjectType: event.target.value as DeviceSubjectType }))}
-                  >
-                    <option value="VESSEL">Vessel</option>
-                    <option value="USER">User</option>
-                    <option value="GROUP">Group</option>
-                    <option value="ORG">Org</option>
-                  </select>
+                    options={[
+                      { value: "VESSEL", label: "Vessel" },
+                      { value: "USER", label: "User" },
+                      { value: "GROUP", label: "Group" },
+                      { value: "ORG", label: "Org" }
+                    ]}
+                  />
                   <Input
+                    label="Subject ID"
                     value={deviceAdmin.subjectId}
                     onChange={(event) => setDeviceAdmin((current) => ({ ...current, subjectId: event.target.value }))}
                     placeholder="Subject id"
                   />
                 </div>
                 <Textarea
+                  label="Ed25519 public key"
                   value={deviceAdmin.publicKey}
                   onChange={(event) => setDeviceAdmin((current) => ({ ...current, publicKey: event.target.value }))}
                   placeholder="Ed25519 public key"
@@ -1340,8 +1694,8 @@ export function App() {
                   className="mt-2"
                 />
                 <div className="flex flex-wrap gap-2 mt-2">
-                  <Button size="sm" onClick={handleRegisterAdminDevice}>Register</Button>
-                  <Button variant="secondary" size="sm" onClick={() => handleRevokeAdminDevice()}>Revoke Entered</Button>
+                  <Button size="sm" loading={isBusy("register-device")} onClick={() => runAction("register-device", handleRegisterAdminDevice)}>Register</Button>
+                  <Button variant="secondary" size="sm" onClick={() => requestRevokeDevice()}>Revoke Entered</Button>
                 </div>
                 {adminResult && <p className="text-sm text-[var(--ink-muted)] mt-2">{adminResult}</p>}
               </div>
@@ -1372,31 +1726,36 @@ export function App() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={handleLoadRulesets}>Load Rulesets</Button>
-                <Button variant="secondary" size="sm" onClick={handlePublishRulesetDraft}>Publish Draft</Button>
+                <Button size="sm" loading={isBusy("load-rulesets")} onClick={() => runAction("load-rulesets", handleLoadRulesets)}>Load Rulesets</Button>
+                <Button variant="secondary" size="sm" loading={isBusy("ruleset-publish")} onClick={requestPublishRulesetDraft}>Publish Draft</Button>
               </div>
 
               <div className="admin-form mt-4">
                 <Input
+                  label="Ruleset ID"
                   value={rulesetDraft.rulesetId}
                   onChange={(event) => setRulesetDraft((current) => ({ ...current, rulesetId: event.target.value }))}
                   placeholder="Ruleset id"
                 />
                 <div className="admin-inline mt-2">
-                  <select
+                  <Select
+                    label="Mode"
                     value={rulesetDraft.mode}
                     onChange={(event) => setRulesetDraft((current) => ({ ...current, mode: event.target.value as "OFFSHORE" | "ICE" }))}
-                  >
-                    <option value="OFFSHORE">Offshore</option>
-                    <option value="ICE">Ice</option>
-                  </select>
+                    options={[
+                      { value: "OFFSHORE", label: "Offshore" },
+                      { value: "ICE", label: "Ice" }
+                    ]}
+                  />
                   <Input
+                    label="Region code"
                     value={rulesetDraft.regionCode}
                     onChange={(event) => setRulesetDraft((current) => ({ ...current, regionCode: event.target.value }))}
                     placeholder="Region"
                   />
                 </div>
                 <Input
+                  label="Priority"
                   type="number"
                   value={rulesetDraft.priority}
                   onChange={(event) => setRulesetDraft((current) => ({ ...current, priority: Number(event.target.value) || 1 }))}
@@ -1428,7 +1787,7 @@ export function App() {
               <CardTitle>Audit Console</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button size="sm" onClick={handleLoadAuditEvents}>Load Audit Events</Button>
+              <Button size="sm" loading={isBusy("load-audit")} onClick={() => runAction("load-audit", handleLoadAuditEvents)}>Load Audit Events</Button>
               {auditError && <p className="text-sm text-[var(--danger)] mt-3">{auditError}</p>}
               {auditEvents.length > 0 && (
                 <Stack gap="sm" className="mt-4">
@@ -1471,206 +1830,271 @@ export function App() {
       </Section>
 
       {/* VISUALIZATION DASHBOARD */}
-      <section className="panel-grid">
-        <div className="viz-section-header" style={{ gridColumn: "1 / -1", marginTop: "2rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Operations Visualizations</h2>
-        </div>
-
-        {/* Real-Time Fleet & Weather Section */}
-        <article className="panel" style={{ gridColumn: "1 / -1" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-            <div>
-              <h3>Real-Time Fleet and Weather</h3>
-              <p className="muted">Live vessel positions and marine conditions for the active operating area.</p>
-            </div>
-          </div>
-          <RealTimeFleetAI
-            boundingBox={[[-170, 50], [-130, 70]]} // Bering Sea
-            weatherPosition={[55, -165]} // Dutch Harbor area
-            width={isMobile ? 300 : 600}
-            height={isMobile ? 200 : 300}
-            enableAI={true}
-            mode="OFFSHORE"
-          />
-        </article>
-
-        {/* Fleet Map */}
-        <article className="glass-card panel viz-panel animate-fade-in">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3>Fleet Tactical Map</h3>
-            <button
-              className="secondary"
-              style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }}
-              onClick={() => {
-                const svg = document.querySelector(".fleet-map") as SVGSVGElement;
-                if (svg) exportToPNG(svg, `fleet-map-${new Date().toISOString().slice(0, 10)}.png`);
-              }}
-            >
-              Export PNG
-            </button>
-          </div>
-          <p className="muted">{vesselsLoading ? "Loading live data..." : vesselsError ? `Error: ${vesselsError}` : `${vessels.length} vessels tracked`}</p>
-          <FleetMap vessels={vessels} width={chartWidth} height={chartHeight} />
-        </article>
-
-        {/* Risk Heat Map */}
-        <article className="glass-card panel animate-fade-in">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3>Risk Heat Map</h3>
-            <button
-              className="secondary"
-              style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }}
-              onClick={() => {
-                const svg = document.querySelector(".risk-heatmap") as SVGSVGElement;
-                if (svg) exportToPNG(svg, `risk-heatmap-${new Date().toISOString().slice(0, 10)}.png`);
-              }}
-            >
-              Export PNG
-            </button>
-          </div>
-          <p className="muted">{riskLoading ? "Loading risk data..." : riskError2 ? `Error: ${riskError2}` : `${riskZones.length} risk zones`}</p>
-          <RiskHeatMap zones={riskZones} width={isMobile ? 280 : 300} height={isMobile ? 160 : 200} />
-        </article>
-
-        {/* Trip Timeline */}
-        <article className="glass-card panel animate-fade-in">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3>Trip Phase Timeline</h3>
-            <button
-              className="secondary"
-              style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }}
-              onClick={() => {
-                const svg = document.querySelector(".trip-timeline") as SVGSVGElement;
-                if (svg) exportToPNG(svg, `trip-timeline-${new Date().toISOString().slice(0, 10)}.png`);
-              }}
-            >
-              Export PNG
-            </button>
-          </div>
-          <p className="muted">{phasesLoading ? "Loading timeline..." : phasesError ? `Error: ${phasesError}` : `${tripPhases.length} phases`}</p>
-          {tripPhases.length > 0 ? (
-            <TripTimeline phases={tripPhases} width={isMobile ? 280 : 400} height={isMobile ? 60 : 80} />
-          ) : (
-            <p className="muted">No trip timeline events available.</p>
-          )}
-        </article>
-
-        {/* Catch Analytics */}
-        <article className="glass-card panel animate-fade-in">
-          <h3>Gear Status Distribution</h3>
-          <p className="muted">Live counts from current trip gear state</p>
-          {gearStatusChart ? (
-            <BarChart data={gearStatusChart} height={isMobile ? 120 : 150} />
-          ) : (
-            <p className="muted">No gear data available.</p>
-          )}
-        </article>
-
-        {/* Risk Distribution */}
-        <article className="glass-card panel animate-fade-in">
-          <h3>Risk Distribution</h3>
-          <p className="muted">Fleet-wide risk tier breakdown</p>
-          {riskDistribution.length > 0 ? (
-            <div style={{ display: "flex", justifyContent: "center", padding: "1rem" }}>
-              <DonutChart
-                data={riskDistribution}
-                size={donutSize}
-                centerLabel={
-                  <span style={{ fontSize: isMobile ? "1.2rem" : "1.5rem", fontWeight: 700, color: "var(--accent)" }}>
-                    {riskDistribution.reduce((sum, item) => sum + item.value, 0)}
-                  </span>
-                }
+      <Section title="Operations Visualizations" description="Live charts built from trips, gear, hazards, and sync telemetry.">
+        <Stack gap="md">
+          {/* Real-Time Fleet & Weather */}
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle>Real-Time Fleet and Weather</CardTitle>
+              <CardDescription>
+                Vessel positions from the AIS feed projected onto the Bering Sea operating region, with marine
+                conditions sampled near Dutch Harbor.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RealTimeFleetAI
+                boundingBox={FLEET_BOUNDING_BOX}
+                weatherPosition={WEATHER_POSITION}
+                width={isMobile ? 300 : 600}
+                height={isMobile ? 200 : 300}
+                enableAI={true}
               />
-            </div>
-          ) : (
-            <p className="muted">No risk-zone data available.</p>
-          )}
-        </article>
+            </CardContent>
+          </Card>
 
-        {/* Gear Health Dashboard */}
-        <article className="glass-card panel viz-panel animate-fade-in">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3>Gear Health Monitor</h3>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                className="secondary"
-                style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }}
-                onClick={refetchGear}
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-          <p className="muted">{gearLoading ? "Loading gear data..." : gearError ? `Error: ${gearError}` : `${gearItems.length} gear items`}</p>
-          <GearHealthDashboard items={gearItems} />
-        </article>
-
-        {/* Compliance Progress */}
-        <article className="glass-card panel animate-fade-in">
-          <h3>Compliance Checklist</h3>
-          <p className="muted">{complianceLoading ? "Loading..." : complianceError ? `Error: ${complianceError}` : `${checkpoints.filter(c => c.completed).length}/${checkpoints.length} complete`}</p>
-          {checkpoints.length > 0 ? (
-            <ComplianceProgress checkpoints={checkpoints} />
-          ) : (
-            <p className="muted">No compliance checkpoints loaded.</p>
-          )}
-        </article>
-
-        {/* Sync Health */}
-        <article className="glass-card panel animate-fade-in">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3>Sync Network Health</h3>
-            <button
-              className="secondary"
-              style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }}
-              onClick={() => {
-                const svg = document.querySelector(".sync-network-viz") as SVGSVGElement;
-                if (svg) exportToPNG(svg, `sync-health-${new Date().toISOString().slice(0, 10)}.png`);
-              }}
+          {/* Fleet Map */}
+          <Card variant="glass">
+            <CardHeader
+              actions={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={isBusy("export-fleet-map")}
+                  onClick={() => runAction("export-fleet-map", () => handleExportChart(fleetMapRef.current, "fleet-map"))}
+                >
+                  Export PNG
+                </Button>
+              }
             >
-              Export PNG
-            </button>
-          </div>
-          <p className="muted">{syncLoading ? "Loading sync data..." : syncError ? `Error: ${syncError}` : `${syncNodes.length} devices`}</p>
-          <SyncHealthMonitor nodes={syncNodes} />
-        </article>
-
-        {/* Traceability Flow */}
-        <article className="glass-card panel viz-panel animate-fade-in">
-          <h3>Traceability Flow</h3>
-          <p className="muted">Lot lifecycle from catch to certificate</p>
-          <TraceabilityFlow
-            stages={traceabilityStages}
-            currentStage={Math.max(0, traceabilityStages.findIndex((stage) => stage.status === "ACTIVE"))}
-          />
-        </article>
-
-        {/* Trend Sparklines */}
-        <article className="glass-card panel animate-fade-in">
-          <h3>24h Trends</h3>
-          {syncTrendData ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "1rem" }}>
-              <div>
-                <span className="muted">Sync Metric Snapshot</span>
-                <Sparkline data={syncTrendData} color="var(--accent)" width={isMobile ? 200 : 300} />
+              <CardTitle>Fleet Tactical Map</CardTitle>
+              <CardDescription>
+                {vesselsLoading
+                  ? "Loading live data..."
+                  : vesselsError
+                    ? `Error: ${vesselsError}`
+                    : `${vessels.length} vessels tracked${vesselsApproximate ? " — approximate positions (no live geo data for some vessels)" : ""}`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div ref={fleetMapRef}>
+                <FleetMap vessels={vessels} width={chartWidth} height={chartHeight} />
               </div>
-            </div>
-          ) : (
-            <p className="muted">Load sync metrics to view trend data.</p>
-          )}
-        </article>
+            </CardContent>
+          </Card>
 
-        {/* Historical Trends - NEW */}
-        <article className="glass-card panel viz-panel animate-fade-in">
-          <h3>Trip Status Trends</h3>
-          <p className="muted">Distribution of currently loaded trip states</p>
-          {statusTrendData ? (
-            <BarChart data={statusTrendData} height={isMobile ? 100 : 120} />
-          ) : (
-            <p className="muted">Load trip timeline data to view status trends.</p>
-          )}
-        </article>
-      </section>
+          <Grid cols={2} gap="md">
+            {/* Risk Heat Map */}
+            <Card variant="glass">
+              <CardHeader
+                actions={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBusy("export-risk-heatmap")}
+                    onClick={() => runAction("export-risk-heatmap", () => handleExportChart(riskHeatmapRef.current, "risk-heatmap"))}
+                  >
+                    Export PNG
+                  </Button>
+                }
+              >
+                <CardTitle>Risk Heat Map</CardTitle>
+                <CardDescription>
+                  {riskLoading ? "Loading risk data..." : riskError2 ? `Error: ${riskError2}` : `${riskZones.length} risk zones`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div ref={riskHeatmapRef}>
+                  <RiskHeatMap zones={riskZones} width={isMobile ? 280 : 300} height={isMobile ? 160 : 200} />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Trip Timeline */}
+            <Card variant="glass">
+              <CardHeader
+                actions={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBusy("export-trip-timeline")}
+                    onClick={() => runAction("export-trip-timeline", () => handleExportChart(tripTimelineRef.current, "trip-timeline"))}
+                  >
+                    Export PNG
+                  </Button>
+                }
+              >
+                <CardTitle>Trip Phase Timeline</CardTitle>
+                <CardDescription>
+                  {phasesLoading ? "Loading timeline..." : phasesError ? `Error: ${phasesError}` : `${tripPhases.length} phases`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {tripPhases.length > 0 ? (
+                  <div ref={tripTimelineRef}>
+                    <TripTimeline phases={tripPhases} width={isMobile ? 280 : 400} height={isMobile ? 60 : 80} />
+                  </div>
+                ) : (
+                  <p className="text-sm text-[var(--ink-muted)]">No trip timeline events available.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Catch Analytics */}
+            <Card variant="glass">
+              <CardHeader>
+                <CardTitle>Gear Status Distribution</CardTitle>
+                <CardDescription>Live counts from current trip gear state</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {gearStatusChart ? (
+                  <BarChart data={gearStatusChart} height={isMobile ? 120 : 150} />
+                ) : (
+                  <p className="text-sm text-[var(--ink-muted)]">No gear data available.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Risk Distribution */}
+            <Card variant="glass">
+              <CardHeader>
+                <CardTitle>Risk Distribution</CardTitle>
+                <CardDescription>Fleet-wide risk tier breakdown</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {riskDistribution.length > 0 ? (
+                  <div style={{ display: "flex", justifyContent: "center", padding: "1rem" }}>
+                    <DonutChart
+                      data={riskDistribution}
+                      size={donutSize}
+                      centerLabel={
+                        <span style={{ fontSize: isMobile ? "1.2rem" : "1.5rem", fontWeight: 700, color: "var(--accent)" }}>
+                          {riskDistribution.reduce((sum, item) => sum + item.value, 0)}
+                        </span>
+                      }
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm text-[var(--ink-muted)]">No risk-zone data available.</p>
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Gear Health Dashboard */}
+          <Card variant="glass">
+            <CardHeader
+              actions={
+                <Button variant="secondary" size="sm" onClick={refetchGear}>
+                  Refresh
+                </Button>
+              }
+            >
+              <CardTitle>Gear Health Monitor</CardTitle>
+              <CardDescription>
+                {gearLoading ? "Loading gear data..." : gearError ? `Error: ${gearError}` : `${gearItems.length} gear items`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <GearHealthDashboard items={gearItems} />
+            </CardContent>
+          </Card>
+
+          <Grid cols={2} gap="md">
+            {/* Compliance Progress */}
+            <Card variant="glass">
+              <CardHeader>
+                <CardTitle>Compliance Checklist</CardTitle>
+                <CardDescription>
+                  {complianceLoading
+                    ? "Loading..."
+                    : complianceError
+                      ? `Error: ${complianceError}`
+                      : `${checkpoints.filter(c => c.completed).length}/${checkpoints.length} complete`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {checkpoints.length > 0 ? (
+                  <ComplianceProgress checkpoints={checkpoints} />
+                ) : (
+                  <p className="text-sm text-[var(--ink-muted)]">No compliance checkpoints loaded.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Sync Health */}
+            <Card variant="glass">
+              <CardHeader
+                actions={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBusy("export-sync-health")}
+                    onClick={() => runAction("export-sync-health", () => handleExportChart(syncHealthRef.current, "sync-health"))}
+                  >
+                    Export PNG
+                  </Button>
+                }
+              >
+                <CardTitle>Sync Network Health</CardTitle>
+                <CardDescription>
+                  {syncLoading ? "Loading sync data..." : syncError ? `Error: ${syncError}` : `${syncNodes.length} devices`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div ref={syncHealthRef}>
+                  <SyncHealthMonitor nodes={syncNodes} />
+                </div>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Traceability Flow */}
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle>Traceability Flow</CardTitle>
+              <CardDescription>Lot lifecycle from catch to certificate</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TraceabilityFlow
+                stages={traceabilityStages}
+                currentStage={Math.max(0, traceabilityStages.findIndex((stage) => stage.status === "ACTIVE"))}
+              />
+            </CardContent>
+          </Card>
+
+          <Grid cols={2} gap="md">
+            {/* Trend Sparklines */}
+            <Card variant="glass">
+              <CardHeader>
+                <CardTitle>24h Trends</CardTitle>
+                <CardDescription>Sync metric snapshot</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {syncTrendData ? (
+                  <Sparkline data={syncTrendData} color="var(--accent)" width={isMobile ? 200 : 300} />
+                ) : (
+                  <p className="text-sm text-[var(--ink-muted)]">Load sync metrics to view trend data.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Trip Status Trends */}
+            <Card variant="glass">
+              <CardHeader>
+                <CardTitle>Trip Status Trends</CardTitle>
+                <CardDescription>Distribution of currently loaded trip states</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {statusTrendData ? (
+                  <BarChart data={statusTrendData} height={isMobile ? 100 : 120} />
+                ) : (
+                  <p className="text-sm text-[var(--ink-muted)]">Load trip timeline data to view status trends.</p>
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        </Stack>
+      </Section>
     </AppShell>
   );
 }

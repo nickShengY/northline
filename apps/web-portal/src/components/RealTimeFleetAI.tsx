@@ -4,12 +4,12 @@ import { getCurrentMarineConditions, assessWeatherRisk } from "../lib/external-a
 import { FleetMap, RiskHeatMap, type RiskZone } from "./charts";
 
 interface RealTimeFleetOverlayProps {
+  /** [[lonMin, latMin], [lonMax, latMax]] region the map projects vessel positions into. */
   boundingBox?: [[number, number], [number, number]];
   weatherPosition?: [number, number];
   width?: number;
   height?: number;
   enableAI?: boolean;
-  mode?: "OFFSHORE" | "ICE";
 }
 
 export function RealTimeFleetOverlay({
@@ -17,8 +17,7 @@ export function RealTimeFleetOverlay({
   weatherPosition = [55, -165],
   width = 600,
   height = 400,
-  enableAI = true,
-  mode = "OFFSHORE"
+  enableAI = true
 }: RealTimeFleetOverlayProps) {
   const [showRiskPanel, setShowRiskPanel] = useState(false);
   const [showAIRecommendations, setShowAIRecommendations] = useState(false);
@@ -50,9 +49,12 @@ export function RealTimeFleetOverlay({
   });
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchWeather = async () => {
       const conditions = await getCurrentMarineConditions(weatherPosition[0], weatherPosition[1]);
-      if (!conditions) return;
+      // Guard against state updates after unmount (or after the position changed).
+      if (!mounted || !conditions) return;
       const risk = assessWeatherRisk({
         waveHeight: conditions.waveHeight,
         windSpeed: conditions.windSpeed
@@ -67,7 +69,10 @@ export function RealTimeFleetOverlay({
     };
     fetchWeather();
     const interval = setInterval(fetchWeather, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
   }, [weatherPosition]);
 
   useEffect(() => {
@@ -121,6 +126,7 @@ export function RealTimeFleetOverlay({
         >
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <span
+              aria-hidden="true"
               style={{
                 width: 8,
                 height: 8,
@@ -162,6 +168,7 @@ export function RealTimeFleetOverlay({
                 onClick={() => setShowAIRecommendations((value) => !value)}
                 className={aiRecommendations.length > 0 ? "active" : "secondary"}
                 style={{ padding: "0.25rem 0.5rem", fontSize: "0.625rem" }}
+                aria-expanded={showAIRecommendations}
               >
                 Insights {aiRecommendations.length}
               </button>
@@ -171,6 +178,7 @@ export function RealTimeFleetOverlay({
                 onClick={() => setShowRiskPanel((value) => !value)}
                 className="secondary"
                 style={{ padding: "0.25rem 0.5rem", fontSize: "0.625rem" }}
+                aria-expanded={showRiskPanel}
               >
                 Risks {highRiskCount}
               </button>
