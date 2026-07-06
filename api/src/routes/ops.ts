@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { replay, type OpsEvent } from "@northline/shared";
 import type { AuthContext, Env } from "../types";
-import { eventsSinceCursor } from "../lib/events";
+import { eventsForTrip } from "../lib/events";
 import { runComplianceValidation } from "../services/compliance";
 import { withTenant } from "../lib/db";
 import { appendServerEvent } from "../lib/server-events";
@@ -18,8 +18,20 @@ opsRouter.get("/dashboard", async (c) => {
       select
         count(*) filter (where status = 'ACTIVE')::int as active_trips,
         coalesce(sum(compliance_open_issues), 0)::int as compliance_issues_open,
-        count(*) filter (where compliance_open_issues = 0)::int as compliance_signed,
-        count(*) filter (where compliance_open_issues > 0)::int as compliance_pending,
+        count(*) filter (where exists (
+          select 1 from compliance_state
+          where compliance_state.tenant_id = trip_state.tenant_id
+            and compliance_state.trip_id = trip_state.trip_id
+            and compliance_state.status = 'SIGNED'
+            and compliance_state.signed_at is not null
+        ))::int as compliance_signed,
+        count(*) filter (where not exists (
+          select 1 from compliance_state
+          where compliance_state.tenant_id = trip_state.tenant_id
+            and compliance_state.trip_id = trip_state.trip_id
+            and compliance_state.status = 'SIGNED'
+            and compliance_state.signed_at is not null
+        ))::int as compliance_pending,
         count(*) filter (where latest_risk_tier = 'LOW')::int as low_risk,
         count(*) filter (where latest_risk_tier = 'MODERATE')::int as moderate_risk,
         count(*) filter (where latest_risk_tier = 'HIGH')::int as high_risk,
@@ -80,11 +92,7 @@ opsRouter.get("/dashboard", async (c) => {
 opsRouter.get("/trip/:tripId/state", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, 5000)) as OpsEvent[];
-  const tripEvents = events.filter((e) => {
-    const payload = e.payload_json as Record<string, unknown>;
-    return payload.trip_id === tripId;
-  });
+  const tripEvents = await eventsForTrip(c.env, auth.tenantId, tripId, { limit: 5000 });
 
   const state = replay(tripEvents);
   const compliance = runComplianceValidation(tripEvents);
@@ -100,11 +108,7 @@ opsRouter.get("/trip/:tripId/state", async (c) => {
 opsRouter.get("/trip/:tripId/compliance/summary", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, 5000)) as OpsEvent[];
-  const tripEvents = events.filter((event) => {
-    const payload = event.payload_json as Record<string, unknown>;
-    return payload.trip_id === tripId;
-  });
+  const tripEvents = await eventsForTrip(c.env, auth.tenantId, tripId, { limit: 5000 });
 
   const compliance = runComplianceValidation(tripEvents);
   return c.json({ trip_id: tripId, compliance });
@@ -116,11 +120,7 @@ opsRouter.post("/trip/:tripId/compliance/sign", requireRole("ORG_ADMIN", "OWNER"
   const body = await c.req.json().catch(() => ({}));
   const pkgId = typeof body?.pkg_id === "string" && body.pkg_id.trim().length > 0 ? body.pkg_id : `pkg_${tripId}`;
 
-  const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, 5000)) as OpsEvent[];
-  const tripEvents = events.filter((event) => {
-    const payload = event.payload_json as Record<string, unknown>;
-    return payload.trip_id === tripId;
-  });
+  const tripEvents = await eventsForTrip(c.env, auth.tenantId, tripId, { limit: 5000 });
   const compliance = runComplianceValidation(tripEvents);
 
   await withTenant(c.env, auth.tenantId, async (sql) => {
@@ -206,14 +206,8 @@ opsRouter.get("/trip/:tripId/timeline", async (c) => {
   if (!limitResult.ok) return c.json(limitResult.error, 400);
   const limit = limitResult.value;
 
-  const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, Math.max(limit * 2, 1000))) as OpsEvent[];
-  const timeline = events
-    .filter((event) => {
-      const payload = event.payload_json as Record<string, unknown>;
-      return payload.trip_id === tripId;
-    })
-    .slice(-limit)
-    .sort((a, b) => a.ts_device.localeCompare(b.ts_device));
+  const events = await eventsForTrip(c.env, auth.tenantId, tripId, { limit, latest: true });
+  const timeline = [...events].sort((a, b) => a.ts_device.localeCompare(b.ts_device));
 
   return c.json({ trip_id: tripId, count: timeline.length, timeline });
 });
@@ -247,11 +241,7 @@ opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTA
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
 
-  const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, 20000)) as OpsEvent[];
-  const tripEvents = events.filter((event) => {
-    const payload = event.payload_json as Record<string, unknown>;
-    return payload.trip_id === tripId;
-  });
+  const tripEvents = await eventsForTrip(c.env, auth.tenantId, tripId, { limit: 20000 });
 
   if (!tripEvents.length) {
     return c.json({ ok: false, reason: "trip_events_not_found" }, 404);

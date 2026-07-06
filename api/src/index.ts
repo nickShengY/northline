@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "./types";
-import { authMiddleware } from "./lib/auth";
+import { authenticateToken, authMiddleware, bearerTokenFromHeader } from "./lib/auth";
 import { syncRouter } from "./routes/sync";
 import { stlRouter } from "./routes/stl";
 import { opsRouter } from "./routes/ops";
@@ -145,6 +145,19 @@ app.onError((error, c) => {
   console.error(JSON.stringify(event));
   waitForTelemetry(c, emitTelemetry(c.env, event));
 
+  if (error.message === "server_event_chain_conflict") {
+    // The route's primary write committed but the server-event chain append
+    // lost repeated races; the request is safe to retry.
+    return c.json(
+      {
+        error: "server_event_chain_conflict",
+        message: "concurrent update contention; retry the request",
+        request_id: requestId
+      },
+      503
+    );
+  }
+
   return c.json(
     {
       error: "internal_error",
@@ -159,7 +172,21 @@ app.notFound((c) => c.json({ error: "not_found", path: new URL(c.req.url).pathna
 app.get("/health", (c) => c.json({ ok: true, env: c.env.APP_ENV }));
 app.get("/ready", async (c) => {
   const report = await buildReadinessReport(c.env);
-  return c.json(report, report.ok ? 200 : 503);
+
+  // Detailed check messages reference env var names and configuration state;
+  // only reveal them to authenticated callers. Unauthenticated probes get
+  // generic check names plus booleans.
+  const token = bearerTokenFromHeader(c.req.header("Authorization"));
+  const auth = token ? await authenticateToken(c.env, token) : null;
+  const body = auth
+    ? report
+    : {
+        ok: report.ok,
+        env: report.env,
+        checks: report.checks.map(({ name, ok, required }) => ({ name, ok, required }))
+      };
+
+  return c.json(body, report.ok ? 200 : 503);
 });
 
 app.use("/v1/*", rateLimitMiddleware);
@@ -182,7 +209,8 @@ app.route("/v1/station", stationRouter);
 app.route("/v1/ice", iceRouter);
 app.route("/v1/projection", projectionRouter);
 
-// AIS routes without auth middleware (handle auth internally)
+// AIS routes are authenticated by the shared /v1/* auth middleware above
+// (which also handles websocket token extraction for /v1/ais/stream).
 app.route("/v1/ais", aisProxyRouter);
 
 export default app;

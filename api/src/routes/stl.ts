@@ -5,10 +5,11 @@
  * Provides meaning-first packet upload/download with lossless audit trail.
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import {
   classifyEventPriority,
@@ -52,8 +53,19 @@ const packetAckSchema = z.object({
 
 export const stlRouter = new Hono<{
   Bindings: Env;
-  Variables: { auth: { tenantId: string; actorId: string; deviceId?: string } }
+  Variables: { auth: AuthContext }
 }>();
+
+const deviceIdHeaderPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/**
+ * The auth context carries no device identity; devices self-report it via the
+ * optional x-device-id header (validated as a sync identifier).
+ */
+function requestDeviceId(c: Context<{ Bindings: Env; Variables: { auth: AuthContext } }>): string {
+  const header = c.req.header("x-device-id")?.trim();
+  return header && deviceIdHeaderPattern.test(header) ? header : "unknown";
+}
 
 /**
  * POST /v1/stl/packet - Create a new semantic packet
@@ -63,8 +75,9 @@ export const stlRouter = new Hono<{
  */
 stlRouter.post("/packet", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
-  const parsed = packetCreateSchema.safeParse(body);
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const parsed = packetCreateSchema.safeParse(bodyResult.body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
@@ -83,12 +96,12 @@ stlRouter.post("/packet", async (c) => {
         preview_json, full_payload_json, source_event_ids, lossless_ref,
         preview_bytes, full_bytes, status, created_at
       ) values (
-        ${packet_id}, ${auth.tenantId}, ${auth.deviceId || 'unknown'}, ${trip_id ?? null}, ${priority},
+        ${packet_id}, ${auth.tenantId}, ${requestDeviceId(c)}, ${trip_id ?? null}, ${priority},
         ${JSON.stringify(preview)}::jsonb, ${JSON.stringify(payload_json)}::jsonb,
         ${JSON.stringify(source_event_ids)}::jsonb, ${lossless_ref},
         ${preview_bytes}, ${full_bytes}, 'QUEUED', now()
       )
-      on conflict (packet_id) do update
+      on conflict (tenant_id, packet_id) do update
       set priority = excluded.priority,
           preview_json = excluded.preview_json,
           full_payload_json = excluded.full_payload_json,
@@ -115,7 +128,9 @@ stlRouter.post("/packet", async (c) => {
  */
 stlRouter.post("/upload", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = (bodyResult.body ?? {}) as { connectivity?: unknown };
   const connectivityParsed = connectivityReportSchema.safeParse(body.connectivity ?? {});
 
   // Default to moderate connectivity if not provided
@@ -232,8 +247,9 @@ stlRouter.post("/upload", async (c) => {
  */
 stlRouter.post("/ack", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
-  const parsed = packetAckSchema.safeParse(body);
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const parsed = packetAckSchema.safeParse(bodyResult.body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);

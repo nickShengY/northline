@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { validateOptionalQueryParam } from "../lib/route-params";
@@ -48,7 +49,9 @@ export const gearRouter = new Hono<{ Bindings: Env; Variables: { auth: { tenantI
 
 gearRouter.post("/transition", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = transitionSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -106,7 +109,9 @@ gearRouter.post("/transition", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CRE
 
 gearRouter.post("/sweep-check", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = sweepSchema.safeParse(body);
 
   if (!parsed.success) {

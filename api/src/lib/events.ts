@@ -205,6 +205,13 @@ export async function validateDeviceChainContinuity(
   return "ok";
 }
 
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  const message = (error as { message?: unknown }).message;
+  return code === "23505" || (typeof message === "string" && message.includes("duplicate key"));
+}
+
 export async function appendEvents(env: Env, tenantId: string, events: OpsEvent[]) {
   if (!events.length) return { accepted: [], rejected: [] as Array<{ event_id: string; reason: string }> };
 
@@ -220,8 +227,16 @@ export async function appendEvents(env: Env, tenantId: string, events: OpsEvent[
         continue;
       }
 
-      const dup = await sql`select 1 from ops_event where event_id = ${event.event_id} limit 1`;
+      const dup = await sql`
+        select to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server
+        from ops_event
+        where tenant_id = ${tenantId} and event_id = ${event.event_id}
+        limit 1
+      `;
       if (dup.length) {
+        // Idempotent redelivery: the event is already durably stored, so
+        // report it as accepted rather than leaving the client to retry forever.
+        accepted.push({ ...event, ts_server: dup[0]?.ts_server ? String(dup[0].ts_server) : event.ts_server });
         continue;
       }
 
@@ -231,18 +246,32 @@ export async function appendEvents(env: Env, tenantId: string, events: OpsEvent[
         continue;
       }
 
-      await sql`
-        insert into ops_event (
-          event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
-          ts_device, event_type, schema_version, payload_json, prev_hash, event_hash, signature
-        ) values (
-          ${event.event_id}, ${event.tenant_id}, ${event.subject_type}, ${event.subject_id}, ${event.actor_id}, ${event.device_id},
-          ${event.ts_device}::timestamptz, ${event.event_type}, ${event.schema_version}, ${JSON.stringify(event.payload_json)}::jsonb,
-          ${event.prev_hash ?? null}, ${event.event_hash}, ${event.signature}
-        )
-      `;
+      let inserted;
+      try {
+        inserted = await sql`
+          insert into ops_event (
+            event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
+            ts_device, event_type, schema_version, payload_json, prev_hash, event_hash, signature
+          ) values (
+            ${event.event_id}, ${event.tenant_id}, ${event.subject_type}, ${event.subject_id}, ${event.actor_id}, ${event.device_id},
+            ${event.ts_device}::timestamptz, ${event.event_type}, ${event.schema_version}, ${JSON.stringify(event.payload_json)}::jsonb,
+            ${event.prev_hash ?? null}, ${event.event_hash}, ${event.signature}
+          )
+          returning to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server
+        `;
+      } catch (error) {
+        // ops_event.event_id is a global primary key while the dedup check
+        // above is tenant-scoped: a colliding id owned by another tenant must
+        // reject just this event, not 500 the whole batch (which would also
+        // leak an existence oracle across tenants).
+        if (isUniqueViolation(error)) {
+          rejected.push({ event_id: event.event_id, reason: "event_id_conflict" });
+          continue;
+        }
+        throw error;
+      }
       await projectAcceptedEvent(sql, tenantId, event);
-      accepted.push(event);
+      accepted.push({ ...event, ts_server: inserted[0]?.ts_server ? String(inserted[0].ts_server) : event.ts_server });
     }
   });
 
@@ -268,13 +297,61 @@ export function parseEventCursor(cursor?: string): ParsedEventCursor {
   };
 }
 
+/**
+ * Fetches events belonging to a single trip/subject with a SQL-level filter
+ * (payload trip_id or subject_id match), instead of scanning the oldest N
+ * tenant-wide events and filtering in JS.
+ *
+ * With `latest: true` the most recent `limit` events are returned (still in
+ * ascending ts_server order); otherwise the earliest `limit` events are used.
+ */
+export async function eventsForTrip(
+  env: Env,
+  tenantId: string,
+  tripId: string,
+  options: { limit?: number; latest?: boolean } = {}
+): Promise<OpsEvent[]> {
+  const limit = options.limit ?? 5000;
+  return withTenant(env, tenantId, async (sql) => {
+    const rows = options.latest
+      ? await sql`
+        select event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
+               to_char(ts_device at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_device,
+               to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server,
+               event_type, schema_version, payload_json,
+               prev_hash, event_hash, signature
+        from ops_event
+        where tenant_id = ${tenantId}
+          and (payload_json->>'trip_id' = ${tripId} or subject_id = ${tripId})
+        order by ts_server desc, event_id desc
+        limit ${limit}
+      `
+      : await sql`
+        select event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
+               to_char(ts_device at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_device,
+               to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server,
+               event_type, schema_version, payload_json,
+               prev_hash, event_hash, signature
+        from ops_event
+        where tenant_id = ${tenantId}
+          and (payload_json->>'trip_id' = ${tripId} or subject_id = ${tripId})
+        order by ts_server asc, event_id asc
+        limit ${limit}
+      `;
+
+    return (options.latest ? rows.reverse() : rows) as OpsEvent[];
+  });
+}
+
 export async function eventsSinceCursor(env: Env, tenantId: string, cursor?: string, limit = 1000): Promise<OpsEvent[]> {
   return withTenant(env, tenantId, async (sql) => {
     const parsedCursor = parseEventCursor(cursor);
     const rows = parsedCursor.kind === "event"
       ? await sql`
         select event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
-               ts_device::text, ts_server::text, event_type, schema_version, payload_json,
+               to_char(ts_device at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_device,
+               to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server,
+               event_type, schema_version, payload_json,
                prev_hash, event_hash, signature
         from ops_event
         where tenant_id = ${tenantId}
@@ -288,7 +365,9 @@ export async function eventsSinceCursor(env: Env, tenantId: string, cursor?: str
       : parsedCursor.kind === "timestamp"
         ? await sql`
         select event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
-               ts_device::text, ts_server::text, event_type, schema_version, payload_json,
+               to_char(ts_device at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_device,
+               to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server,
+               event_type, schema_version, payload_json,
                prev_hash, event_hash, signature
         from ops_event
         where tenant_id = ${tenantId}
@@ -298,7 +377,9 @@ export async function eventsSinceCursor(env: Env, tenantId: string, cursor?: str
       `
         : await sql`
         select event_id, tenant_id, subject_type, subject_id, actor_id, device_id,
-               ts_device::text, ts_server::text, event_type, schema_version, payload_json,
+               to_char(ts_device at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_device,
+               to_char(ts_server at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ts_server,
+               event_type, schema_version, payload_json,
                prev_hash, event_hash, signature
         from ops_event
         where tenant_id = ${tenantId}

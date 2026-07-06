@@ -11,14 +11,6 @@ export interface ProjectionRebuildResult {
   duration_ms: number;
 }
 
-export interface ProjectionState {
-  trip_state?: Record<string, unknown>;
-  gear_state?: Record<string, unknown>;
-  compliance_state?: Record<string, unknown>;
-  catch_rollups?: Record<string, unknown>;
-  safety_risk_series?: Record<string, unknown>;
-}
-
 function timestampMillis(value: string | undefined) {
   if (!value) return 0;
   const parsed = Date.parse(value);
@@ -430,7 +422,7 @@ export async function rebuildCatchRollups(
           ${rollup.kept_count}, ${rollup.released_count}, ${rollup.total_weight_kg},
           ${rollup.total_length_cm}, ${rollup.evidence_count}, now()
         )
-        on conflict (rollup_id) do update
+        on conflict (tenant_id, rollup_id) do update
         set kept_count = excluded.kept_count,
             released_count = excluded.released_count,
             total_weight_kg = excluded.total_weight_kg,
@@ -486,46 +478,5 @@ export async function rebuildAllProjections(
     trip_state: tripState,
     gear_state: gearState,
     catch_rollups: catchRollups
-  };
-}
-
-/**
- * Deterministic rebuild test - replay fixture events and verify outputs match expected
- */
-export async function runDeterministicRebuildTest(
-  env: Env,
-  tenantId: string,
-  tripId: string,
-  expectedState: ProjectionState
-): Promise<{
-  passed: boolean;
-  mismatches: Array<{ field: string; expected: unknown; actual: unknown }>;
-}> {
-  const mismatches: Array<{ field: string; expected: unknown; actual: unknown }> = [];
-
-  // Rebuild projections
-  const results = await rebuildAllProjections(env, tenantId, tripId);
-
-  // Fetch rebuilt state
-  const actualState = await withTenant(env, tenantId, async (sql) => {
-    const trip = await sql`
-      select * from trip_state where trip_id = ${tripId} limit 1
-    `;
-    return { trip_state: trip[0] };
-  });
-
-  // Compare expected vs actual
-  if (expectedState.trip_state && actualState.trip_state) {
-    for (const [key, expected] of Object.entries(expectedState.trip_state)) {
-      const actual = (actualState.trip_state as Record<string, unknown>)[key];
-      if (JSON.stringify(expected) !== JSON.stringify(actual)) {
-        mismatches.push({ field: key, expected, actual });
-      }
-    }
-  }
-
-  return {
-    passed: mismatches.length === 0,
-    mismatches
   };
 }

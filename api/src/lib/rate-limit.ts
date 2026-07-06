@@ -21,10 +21,25 @@ function clientAddress(headers: Headers) {
   );
 }
 
+function fnv1a32(input: string, seed = 0x811c9dc5) {
+  let hash = seed >>> 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
 function authFingerprint(headers: Headers) {
   const auth = headers.get("authorization");
   if (!auth) return "anonymous";
-  return auth.slice(0, 32);
+  // Hash the entire credential so distinct tokens with a shared prefix
+  // (e.g. all JWTs starting with the same header segment) get distinct
+  // rate-limit buckets. Non-cryptographic is fine: this is a bucket key,
+  // not a secret, and it never leaves the process.
+  const low = fnv1a32(auth).toString(16).padStart(8, "0");
+  const high = fnv1a32(`${auth.length}:${auth}`, 0x01000193).toString(16).padStart(8, "0");
+  return `${high}${low}`;
 }
 
 function rateLimitKey(env: Env, request: Request) {

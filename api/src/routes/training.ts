@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { recommendTrainingModules } from "../services/training";
 import { requireRole } from "../lib/rbac";
@@ -53,7 +54,9 @@ export const trainingRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthC
 
 trainingRouter.post("/assign", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = assignSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -113,7 +116,9 @@ trainingRouter.post("/assign", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), asy
 
 trainingRouter.post("/complete", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = completeSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -162,7 +167,9 @@ trainingRouter.post("/complete", async (c) => {
 });
 
 trainingRouter.post("/recommend", async (c) => {
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = recommendSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -229,15 +236,38 @@ trainingRouter.get("/modules", async (c) => {
 
 trainingRouter.post("/modules/upsert", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = moduleUpsertSchema.safeParse(body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
-  await withTenant(c.env, auth.tenantId, async (sql) => {
-    await sql`
+  // module_id is globally unique (global template modules carry tenant_id
+  // null), so a bare "on conflict (module_id) do update" could overwrite
+  // another tenant's or a global module. Tenant-checked update, then a
+  // race-safe conditional insert (works even when RLS hides other tenants'
+  // rows).
+  const runTenantUpdate = (sql: Parameters<Parameters<typeof withTenant>[2]>[0]) => sql`
+    update training_module
+    set mode = ${parsed.data.mode},
+        title = ${parsed.data.title},
+        duration_sec = ${parsed.data.duration_sec},
+        quiz_json = ${JSON.stringify(parsed.data.quiz_json ?? {})}::jsonb,
+        prerequisites = ${JSON.stringify(parsed.data.prerequisites)}::jsonb,
+        metadata_json = ${JSON.stringify(parsed.data.metadata_json)}::jsonb,
+        active = ${parsed.data.active}
+    where module_id = ${parsed.data.module_id} and tenant_id = ${auth.tenantId}
+    returning module_id
+  `;
+
+  const scopeConflict = await withTenant(c.env, auth.tenantId, async (sql) => {
+    const updated = await runTenantUpdate(sql);
+    if (updated.length) return false;
+
+    const inserted = await sql`
       insert into training_module (
         module_id, tenant_id, mode, title, duration_sec, quiz_json, prerequisites, metadata_json, active
       ) values (
@@ -245,16 +275,23 @@ trainingRouter.post("/modules/upsert", requireRole("ORG_ADMIN", "OWNER", "CAPTAI
         ${JSON.stringify(parsed.data.quiz_json ?? {})}::jsonb, ${JSON.stringify(parsed.data.prerequisites)}::jsonb,
         ${JSON.stringify(parsed.data.metadata_json)}::jsonb, ${parsed.data.active}
       )
-      on conflict (module_id) do update
-      set mode = excluded.mode,
-          title = excluded.title,
-          duration_sec = excluded.duration_sec,
-          quiz_json = excluded.quiz_json,
-          prerequisites = excluded.prerequisites,
-          metadata_json = excluded.metadata_json,
-          active = excluded.active
+      on conflict (module_id) do nothing
+      returning module_id
     `;
+    if (inserted.length) return false;
+
+    // Conflict: either our own tenant's row landed concurrently (retry the
+    // update) or the id belongs to another scope (409).
+    const retried = await runTenantUpdate(sql);
+    return retried.length === 0;
   });
+
+  if (scopeConflict) {
+    return c.json({
+      error: "training_module_scope_conflict",
+      message: "module_id already exists outside this tenant scope"
+    }, 409);
+  }
 
   await writeAuditLog(c.env, {
     auth,

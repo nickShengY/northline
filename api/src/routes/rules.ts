@@ -6,6 +6,7 @@ import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
 import { fitsJsonByteLimit } from "../lib/json-size";
+import { readJsonBody } from "../lib/request";
 import { validateOptionalQueryParam } from "../lib/route-params";
 
 const modeSchema = z.enum(["OFFSHORE", "ICE"]);
@@ -55,7 +56,8 @@ rulesRouter.get("/effective", async (c) => {
     return sql`
       select ruleset_id, tenant_id, mode, region_code, effective_from::text, effective_to::text, priority, rules_json
       from ruleset
-      where mode = ${modeResult.data}
+      where (tenant_id = ${auth.tenantId} or tenant_id is null)
+        and mode = ${modeResult.data}
         and region_code = ${regionCode}
         and effective_from <= ${effectiveDate}::date
         and (effective_to is null or effective_to >= ${effectiveDate}::date)
@@ -82,13 +84,15 @@ rulesRouter.get("/risk-policy", async (c) => {
       ? sql`
           select policy_id, tenant_id, mode, policy_json, created_at::text
           from risk_policy
-          where mode = ${mode}
+          where (tenant_id = ${auth.tenantId} or tenant_id is null)
+            and mode = ${mode}
           order by case when tenant_id is null then 1 else 0 end, created_at desc
           limit 1
         `
       : sql`
           select policy_id, tenant_id, mode, policy_json, created_at::text
           from risk_policy
+          where tenant_id = ${auth.tenantId} or tenant_id is null
           order by case when tenant_id is null then 1 else 0 end, created_at desc
           limit 1
         `;
@@ -131,15 +135,35 @@ rulesRouter.get("/all", async (c) => {
 
 rulesRouter.post("/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
-  const parsed = rulesetUpsertSchema.safeParse(body);
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const parsed = rulesetUpsertSchema.safeParse(bodyResult.body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
-  await withTenant(c.env, auth.tenantId, async (sql) => {
-    await sql`
+  // ruleset_id is globally unique (global templates carry tenant_id null),
+  // so a bare "on conflict (ruleset_id) do update" could overwrite another
+  // tenant's or a global ruleset. Tenant-checked update, then a race-safe
+  // conditional insert (works even when RLS hides other tenants' rows).
+  const runTenantUpdate = (sql: Parameters<Parameters<typeof withTenant>[2]>[0]) => sql`
+    update ruleset
+    set mode = ${parsed.data.mode},
+        region_code = ${parsed.data.region_code},
+        effective_from = ${parsed.data.effective_from}::date,
+        effective_to = ${parsed.data.effective_to ?? null}::date,
+        priority = ${parsed.data.priority},
+        rules_json = ${JSON.stringify(parsed.data.rules_json)}::jsonb
+    where ruleset_id = ${parsed.data.ruleset_id} and tenant_id = ${auth.tenantId}
+    returning ruleset_id
+  `;
+
+  const scopeConflict = await withTenant(c.env, auth.tenantId, async (sql) => {
+    const updated = await runTenantUpdate(sql);
+    if (updated.length) return false;
+
+    const inserted = await sql`
       insert into ruleset (
         ruleset_id, tenant_id, mode, region_code, effective_from, effective_to, priority, rules_json
       ) values (
@@ -147,15 +171,23 @@ rulesRouter.post("/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
         ${parsed.data.effective_from}::date, ${parsed.data.effective_to ?? null}::date, ${parsed.data.priority},
         ${JSON.stringify(parsed.data.rules_json)}::jsonb
       )
-      on conflict (ruleset_id) do update
-      set mode = excluded.mode,
-          region_code = excluded.region_code,
-          effective_from = excluded.effective_from,
-          effective_to = excluded.effective_to,
-          priority = excluded.priority,
-          rules_json = excluded.rules_json
+      on conflict (ruleset_id) do nothing
+      returning ruleset_id
     `;
+    if (inserted.length) return false;
+
+    // Conflict: either our own tenant's row landed concurrently (retry the
+    // update) or the id belongs to another scope (409).
+    const retried = await runTenantUpdate(sql);
+    return retried.length === 0;
   });
+
+  if (scopeConflict) {
+    return c.json({
+      error: "ruleset_scope_conflict",
+      message: "ruleset_id already exists outside this tenant scope"
+    }, 409);
+  }
 
   const emitted = await appendServerEvent(c.env, auth.tenantId, {
     subject_type: "ORG",
@@ -191,25 +223,49 @@ rulesRouter.post("/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
 
 rulesRouter.post("/risk-policy/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
-  const parsed = riskPolicyUpsertSchema.safeParse(body);
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const parsed = riskPolicyUpsertSchema.safeParse(bodyResult.body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
-  await withTenant(c.env, auth.tenantId, async (sql) => {
-    await sql`
+  // policy_id is globally unique (global templates carry tenant_id null);
+  // guard the upsert so it can never touch rows outside this tenant.
+  const runTenantUpdate = (sql: Parameters<Parameters<typeof withTenant>[2]>[0]) => sql`
+    update risk_policy
+    set mode = ${parsed.data.mode ?? null},
+        policy_json = ${JSON.stringify(parsed.data.policy_json)}::jsonb
+    where policy_id = ${parsed.data.policy_id} and tenant_id = ${auth.tenantId}
+    returning policy_id
+  `;
+
+  const scopeConflict = await withTenant(c.env, auth.tenantId, async (sql) => {
+    const updated = await runTenantUpdate(sql);
+    if (updated.length) return false;
+
+    const inserted = await sql`
       insert into risk_policy (
         policy_id, tenant_id, mode, policy_json
       ) values (
         ${parsed.data.policy_id}, ${auth.tenantId}, ${parsed.data.mode ?? null}, ${JSON.stringify(parsed.data.policy_json)}::jsonb
       )
-      on conflict (policy_id) do update
-      set mode = excluded.mode,
-          policy_json = excluded.policy_json
+      on conflict (policy_id) do nothing
+      returning policy_id
     `;
+    if (inserted.length) return false;
+
+    const retried = await runTenantUpdate(sql);
+    return retried.length === 0;
   });
+
+  if (scopeConflict) {
+    return c.json({
+      error: "risk_policy_scope_conflict",
+      message: "policy_id already exists outside this tenant scope"
+    }, 409);
+  }
 
   await writeAuditLog(c.env, {
     auth,

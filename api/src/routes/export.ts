@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { sha256, type OpsEvent } from "@northline/shared";
+import { sha256 } from "@northline/shared";
 import type { AuthContext, Env } from "../types";
-import { eventsSinceCursor } from "../lib/events";
+import { eventsForTrip } from "../lib/events";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { runComplianceValidation } from "../services/compliance";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
@@ -178,18 +179,16 @@ export const exportRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthCon
 
 exportRouter.post("/compliance-package", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = complianceExportSchema.safeParse(body);
 
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
   }
 
-  const events = (await eventsSinceCursor(c.env, auth.tenantId, undefined, 10000)) as OpsEvent[];
-  const tripEvents = events.filter((event) => {
-    const payload = event.payload_json as Record<string, unknown>;
-    return String(payload.trip_id ?? "") === parsed.data.trip_id;
-  });
+  const tripEvents = await eventsForTrip(c.env, auth.tenantId, parsed.data.trip_id, { limit: 10000 });
 
   const compliance = runComplianceValidation(tripEvents);
   const generatedAt = new Date().toISOString();

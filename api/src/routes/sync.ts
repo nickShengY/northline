@@ -5,6 +5,7 @@ import type { AuthContext, Env } from "../types";
 import { validateIncomingEventWithSignature } from "../lib/validation";
 import { appendEvents, buildEventCursor, eventsSinceCursor } from "../lib/events";
 import { type SqlQuery, withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
@@ -32,14 +33,7 @@ function jsonByteLength(value: unknown) {
 }
 
 async function readSyncJson(c: SyncContext) {
-  const body = await c.req.json().catch(() => undefined);
-  if (body === undefined) {
-    return {
-      ok: false as const,
-      response: c.json({ error: "invalid_payload", message: "request body must be valid JSON" }, 400)
-    };
-  }
-  return { ok: true as const, body };
+  return readJsonBody(c);
 }
 
 const uploadSchema = z.object({
@@ -137,8 +131,6 @@ export async function validateSyncDeviceAuthorization(
   return ["ORG_ADMIN", "OWNER", "CAPTAIN"].includes(auth.role) ? "ok" : "device_role_forbidden";
 }
 
-export const validateSyncAckDeviceAuthorization = validateSyncDeviceAuthorization;
-
 export async function writeSyncCursorAck(env: Env, auth: AuthContext, input: {
   cursor: string;
   deviceId?: string;
@@ -222,8 +214,18 @@ syncRouter.post("/upload", async (c) => {
     }));
   }
 
+  // Advance the cursor to the newest accepted event (ts_server|event_id,
+  // matching the /sync/download cursor format). When nothing was accepted,
+  // echo the client's cursor back unchanged so it does not skip ahead.
+  const lastAccepted = appendResult.accepted.reduce<OpsEvent | null>((max, event) => {
+    if (!event.ts_server) return max;
+    if (!max?.ts_server) return event;
+    const order = event.ts_server.localeCompare(max.ts_server);
+    return order > 0 || (order === 0 && event.event_id > max.event_id) ? event : max;
+  }, null);
+
   return c.json({
-    cursor: new Date().toISOString(),
+    cursor: lastAccepted ? buildEventCursor(lastAccepted) : parsed.data.cursor ?? new Date().toISOString(),
     accepted: appendResult.accepted.map((event) => event.event_id),
     accepted_count: appendResult.accepted.length,
     rejected: allRejected,
@@ -281,12 +283,26 @@ syncRouter.post("/ack", async (c) => {
       ...(ackId ? { ack_id: ackId } : {})
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (message.startsWith("sync_ack_device_authorization_failed:")) {
+      console.warn(JSON.stringify({
+        event: "sync_ack_device_authorization_failed",
+        tenant_id: auth.tenantId,
+        actor_id: auth.actorId,
+        device_id: parsed.data.device_id ?? null,
+        reason: message.replace("sync_ack_device_authorization_failed:", ""),
+        request_id: c.req.header("x-request-id") ?? null
+      }));
+      return c.json({ error: "sync_ack_device_forbidden" }, 403);
+    }
+
     console.warn(JSON.stringify({
       event: "sync_ack_persistence_failed",
       tenant_id: auth.tenantId,
       actor_id: auth.actorId,
       cursor: parsed.data.cursor,
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
       request_id: c.req.header("x-request-id") ?? null
     }));
     return c.json({ error: "sync_ack_persistence_failed" }, 503);

@@ -1,37 +1,17 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { authenticateToken, authMiddleware, websocketTokenFromRequest } from "../lib/auth";
 import { withTenant } from "../lib/db";
 import type { AuthContext, Env } from "../types";
 
 type AisAppContext = { Bindings: Env; Variables: { auth: AuthContext } };
 
+// Authentication (including websocket token extraction) is enforced by the
+// shared /v1/* auth middleware in src/index.ts; no extra layer is needed here.
 const app = new Hono<AisAppContext>();
 const AIS_AI_MAX_BODY_BYTES = 64 * 1024;
 const AIS_AI_MAX_VESSELS = 25;
 const AIS_AI_MAX_OBSERVATIONS = 500;
 const AIS_AI_DEFAULT_TIMEOUT_MS = 12_000;
-
-function websocketToken(c: Context<AisAppContext>): string | null {
-  return websocketTokenFromRequest({
-    url: c.req.url,
-    authorization: c.req.header("Authorization"),
-    protocol: c.req.header("sec-websocket-protocol")
-  });
-}
-
-app.use("*", async (c, next) => {
-  if (c.req.header("Upgrade") === "websocket") {
-    const token = websocketToken(c);
-    const auth = token ? await authenticateToken(c.env, token) : null;
-    if (!auth) {
-      return c.json({ error: "unauthorized" }, 401);
-    }
-    c.set("auth", auth);
-    return next();
-  }
-  return authMiddleware(c as any, next as any);
-});
 
 function requireAisProxyUrl(env: Env) {
   if (!env.AIS_PROXY_URL) {
@@ -598,6 +578,11 @@ app.post("/risk/assess", async (c) => {
       model: "openrouter"
     });
   } catch (error) {
+    console.warn(JSON.stringify({
+      event: "ais_ai_fallback",
+      endpoint: "risk_assess",
+      error: error instanceof Error ? error.message : String(error)
+    }));
     const assessments = buildFallbackRiskAssessments(vessels, body?.weather);
     const highest = assessments.reduce((currentHighest, item) =>
       item.risk_score > currentHighest.risk_score ? item : currentHighest,
@@ -611,7 +596,7 @@ app.post("/risk/assess", async (c) => {
       },
       ai_enhanced: false,
       model: "local-fallback",
-      fallback_reason: error instanceof Error ? error.message : "Unknown error"
+      fallback_reason: "ai_upstream_unavailable"
     });
   }
 });
@@ -680,11 +665,16 @@ app.post("/ai/recommendations", async (c) => {
 
     return c.json({ recommendations, ai_enhanced: true, model: "openrouter" });
   } catch (error) {
+    console.warn(JSON.stringify({
+      event: "ais_ai_fallback",
+      endpoint: "recommendations",
+      error: error instanceof Error ? error.message : String(error)
+    }));
     return c.json({
       recommendations: buildFallbackRecommendations(body as Record<string, unknown>),
       ai_enhanced: false,
       model: "local-fallback",
-      fallback_reason: error instanceof Error ? error.message : "Unknown error"
+      fallback_reason: "ai_upstream_unavailable"
     });
   }
 });
@@ -769,11 +759,16 @@ app.post("/risk/predict-collision", async (c) => {
 
     return c.json({ ...prediction, ai_enhanced: true, model: "openrouter" });
   } catch (error) {
+    console.warn(JSON.stringify({
+      event: "ais_ai_fallback",
+      endpoint: "collision_prediction",
+      error: error instanceof Error ? error.message : String(error)
+    }));
     return c.json({
       ...buildFallbackCollisionPrediction(body.vesselA, body.vesselB),
       ai_enhanced: false,
       model: "local-fallback",
-      fallback_reason: error instanceof Error ? error.message : "Unknown error"
+      fallback_reason: "ai_upstream_unavailable"
     });
   }
 });

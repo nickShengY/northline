@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { generateCertificate } from "../services/certificate";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { detectScanMismatch, mergeSpeciesTotals } from "../services/trace";
 import { requireRole } from "../lib/rbac";
@@ -52,7 +53,9 @@ export const traceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthCont
 
 traceRouter.post("/lot/create", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = lotCreateSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -94,7 +97,9 @@ traceRouter.post("/lot/create", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PR
 
 traceRouter.post("/lot/scan-attach", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = lotScanAttachSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -246,7 +251,9 @@ traceRouter.get("/lots", async (c) => {
 
 traceRouter.post("/certificate/issue", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = certificateRequestSchema.safeParse(body);
 
   if (!parsed.success) {

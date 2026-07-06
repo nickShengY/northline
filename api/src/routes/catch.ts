@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
@@ -68,7 +69,9 @@ export const catchRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthCont
 
 catchRouter.post("/record", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = catchRecordSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -132,7 +135,9 @@ catchRouter.post("/record", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW",
 
 catchRouter.post("/correct", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = catchCorrectSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -196,7 +201,9 @@ catchRouter.post("/correct", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCE
 
 catchRouter.post("/measurement", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = catchMeasurementSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -239,7 +246,9 @@ catchRouter.post("/measurement", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "C
 
 catchRouter.post("/qa", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "PROCESSOR"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = catchQASchema.safeParse(body);
 
   if (!parsed.success) {
@@ -352,11 +361,11 @@ catchRouter.get("/summary/:tripId", async (c) => {
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
       select species,
-             count(*) filter (where kept = true) as kept_count,
-             count(*) filter (where kept = false) as released_count,
-             coalesce(sum(weight_kg), 0)::numeric as total_weight_kg,
-             coalesce(avg(length_cm), 0)::numeric as avg_length_cm,
-             count(*) filter (where qa_flagged = true) as qa_flagged_count
+             count(*) filter (where kept = true)::int as kept_count,
+             count(*) filter (where kept = false)::int as released_count,
+             coalesce(sum(weight_kg), 0)::float as total_weight_kg,
+             coalesce(avg(length_cm), 0)::float as avg_length_cm,
+             count(*) filter (where qa_flagged = true)::int as qa_flagged_count
       from catch_record
       where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
       group by species

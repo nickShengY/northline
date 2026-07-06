@@ -116,6 +116,7 @@ export const eventTypes = [
   // Sync/infra diagnostics
   "SYNC_VALIDATION_REJECTED",
   "SYNC_CURSOR_ADVANCED",
+  "STL_BATCH_UPLOADED",
   "DEVICE_REGISTERED",
   "DEVICE_REVOKED",
   "DEVICE_KEY_ROTATED",

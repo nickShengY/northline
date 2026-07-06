@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { computeRisk } from "../services/risk";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
@@ -67,7 +68,9 @@ const shelterCoReminderAckSchema = z.object({
 export const safetyRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 safetyRouter.post("/risk/score", async (c) => {
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = riskInputSchema.safeParse(body);
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
@@ -79,7 +82,9 @@ safetyRouter.post("/risk/score", async (c) => {
 
 safetyRouter.post("/incident", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = incidentSchema.safeParse(body);
   if (!parsed.success) {
     return c.json({ error: "invalid_payload", details: parsed.error.flatten() }, 400);
@@ -166,7 +171,9 @@ safetyRouter.get("/incidents/open", async (c) => {
 
 safetyRouter.post("/hazard/report", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = hazardSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -267,7 +274,9 @@ safetyRouter.get("/hazards", async (c) => {
 
 safetyRouter.post("/checkin/schedule", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = checkinScheduleSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -310,7 +319,9 @@ safetyRouter.post("/checkin/schedule", requireRole("ORG_ADMIN", "OWNER", "CAPTAI
 
 safetyRouter.post("/checkin/complete", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = checkinStatusSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -351,7 +362,9 @@ safetyRouter.post("/checkin/complete", requireRole("ORG_ADMIN", "OWNER", "CAPTAI
 
 safetyRouter.post("/checkin/missed", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = checkinStatusSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -447,7 +460,9 @@ const mobUpdateSchema = z.object({
 
 safetyRouter.post("/mob/start", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = mobStartSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -485,7 +500,9 @@ safetyRouter.post("/mob/start", async (c) => {
 
 safetyRouter.post("/mob/update", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = mobUpdateSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -627,7 +644,9 @@ const stopWorkSchema = z.object({
 
 safetyRouter.post("/stop-work/trigger", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = stopWorkSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -792,7 +811,9 @@ const briefingSchema = z.object({
 
 safetyRouter.post("/briefing", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = briefingSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -834,7 +855,11 @@ safetyRouter.post("/briefing/:briefingId/acknowledge", async (c) => {
   const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
       update safety_briefing
-      set acknowledged_by = acknowledged_by || ${JSON.stringify([auth.actorId])}::jsonb,
+      set acknowledged_by = case
+            when coalesce(acknowledged_by, '[]'::jsonb) @> ${JSON.stringify([auth.actorId])}::jsonb
+              then coalesce(acknowledged_by, '[]'::jsonb)
+            else coalesce(acknowledged_by, '[]'::jsonb) || ${JSON.stringify([auth.actorId])}::jsonb
+          end,
           acknowledged_at = now()
       where tenant_id = ${auth.tenantId} and briefing_id = ${briefingId}
       returning briefing_id, trip_id, briefing_type, acknowledged_by
@@ -883,7 +908,9 @@ safetyRouter.get("/briefings/:tripId", async (c) => {
 // Shelter heater/CO reminder endpoints
 safetyRouter.post("/shelter/heater-flag", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = shelterHeaterFlagSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -908,7 +935,9 @@ safetyRouter.post("/shelter/heater-flag", async (c) => {
 
 safetyRouter.post("/shelter/co-reminder-ack", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = shelterCoReminderAckSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -933,7 +962,9 @@ safetyRouter.post("/shelter/co-reminder-ack", async (c) => {
 // Near-miss recording
 safetyRouter.post("/near-miss", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = z.object({
     near_miss_id: z.string().min(3),
     trip_id: z.string().min(3),
@@ -968,7 +999,9 @@ safetyRouter.post("/near-miss", async (c) => {
 // Safety playbook trigger
 safetyRouter.post("/playbook/trigger", async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = z.object({
     playbook_id: z.string().min(2),
     trip_id: z.string().min(3),

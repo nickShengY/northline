@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
@@ -50,7 +51,9 @@ export const stationRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthCo
 
 stationRouter.post("/create", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = stationCreateSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -96,7 +99,9 @@ stationRouter.post("/create", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW
 
 stationRouter.post("/update", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = stationUpdateSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -208,7 +213,9 @@ stationRouter.get("/trip/:tripId", async (c) => {
 // Tip-up management
 stationRouter.post("/tipup/set", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = tipupSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -216,7 +223,7 @@ stationRouter.post("/tipup/set", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "C
   }
 
   await withTenant(c.env, auth.tenantId, async (sql) => {
-    await sql`
+    const upserted = await sql`
       insert into gear_state_ice (
         gear_id, tenant_id, trip_id, station_id, status, tipup_type, bait, depth_m, check_interval_min, last_position
       ) values (
@@ -234,15 +241,19 @@ stationRouter.post("/tipup/set", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "C
           check_interval_min = excluded.check_interval_min,
           last_position = coalesce(excluded.last_position, gear_state_ice.last_position),
           updated_at = now()
+      returning (xmax = 0) as inserted
     `;
 
-    // Update station tipup count
-    await sql`
-      update station_state
-      set tipup_count = tipup_count + 1,
-          updated_at = now()
-      where tenant_id = ${auth.tenantId} and station_id = ${parsed.data.station_id}
-    `;
+    // Only bump the station tip-up counter when a new gear row was actually
+    // inserted (xmax = 0); re-setting an existing tip-up must not inflate it.
+    if (upserted[0]?.inserted === true) {
+      await sql`
+        update station_state
+        set tipup_count = tipup_count + 1,
+            updated_at = now()
+        where tenant_id = ${auth.tenantId} and station_id = ${parsed.data.station_id}
+      `;
+    }
   });
 
   const emitted = await appendServerEvent(c.env, auth.tenantId, {
@@ -266,7 +277,9 @@ stationRouter.post("/tipup/set", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "C
 
 stationRouter.post("/tipup/transition", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = tipupTransitionSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -358,17 +371,18 @@ stationRouter.post("/sweep/:tripId", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+  // A sweep is complete when every tip-up has reached a terminal state
+  // (CHECKED or REMOVED); anything still SET/REBAITED/OVERDUE blocks it.
+  const outstanding = await withTenant(c.env, auth.tenantId, async (sql) => {
     return sql`
       select gear_id as tipup_id, station_id, status
       from gear_state_ice
       where tenant_id = ${auth.tenantId}
         and trip_id = ${tripId}
-        and status != 'REMOVED'
+        and status not in ('CHECKED', 'REMOVED')
     `;
   });
 
-  const outstanding = rows.filter((r) => (r as { status: string }).status !== "REMOVED");
   const complete = outstanding.length === 0;
 
   const emitted = await appendServerEvent(c.env, auth.tenantId, {

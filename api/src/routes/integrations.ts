@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
 import { fitsJsonByteLimit } from "../lib/json-size";
@@ -103,7 +104,9 @@ integrationsRouter.get("/configs", requireRole("ORG_ADMIN", "OWNER"), async (c) 
 
 integrationsRouter.post("/configs/upsert", requireRole("ORG_ADMIN", "OWNER"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = integrationUpsertSchema.safeParse(body);
 
   if (!parsed.success) {

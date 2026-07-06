@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AuthContext, Env } from "../types";
 import { withTenant } from "../lib/db";
+import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { fitsJsonByteLimit } from "../lib/json-size";
 import { requireRole } from "../lib/rbac";
@@ -51,7 +52,9 @@ export const iceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContex
 // Ice thickness logging
 iceRouter.post("/thickness", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = iceThicknessSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -139,7 +142,9 @@ iceRouter.get("/thickness/:tripId/latest", async (c) => {
 // Route point logging
 iceRouter.post("/route-point", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = routePointSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -233,7 +238,9 @@ iceRouter.delete("/route-point/:pointId", requireRole("ORG_ADMIN", "OWNER", "CAP
 // Return plan management
 iceRouter.post("/return-plan", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN", "CREW", "GUIDE"), async (c) => {
   const auth = c.get("auth");
-  const body = await c.req.json();
+  const bodyResult = await readJsonBody(c);
+  if (!bodyResult.ok) return bodyResult.response;
+  const body = bodyResult.body;
   const parsed = returnPlanSchema.safeParse(body);
 
   if (!parsed.success) {

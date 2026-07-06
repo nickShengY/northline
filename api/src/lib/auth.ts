@@ -32,6 +32,7 @@ async function parseJwtToken(token: string, env: Env): Promise<AuthContext | nul
   try {
     const key = await jwtVerificationKey(env.JWT_PUBLIC_KEY);
     const { payload } = await jwtVerify(token, key, {
+      algorithms: ["RS256"],
       issuer: env.JWT_ISSUER,
       audience: env.JWT_AUDIENCE
     });
@@ -69,9 +70,18 @@ async function jwtVerificationKey(publicKeyPem: string) {
 }
 
 export async function authenticateToken(env: Env, token: string): Promise<AuthContext | null> {
-  return env.APP_ENV === "development"
-    ? parseDevToken(token) ?? (await parseJwtToken(token, env))
-    : await parseJwtToken(token, env);
+  if (env.APP_ENV !== "development") {
+    return parseJwtToken(token, env);
+  }
+
+  // Development: when a JWT verifier is configured, prefer real JWT
+  // verification and only fall back to the colon-delimited dev-token format
+  // (which JWTs can never match, since they contain no valid role segment).
+  if (env.JWT_PUBLIC_KEY) {
+    return (await parseJwtToken(token, env)) ?? parseDevToken(token);
+  }
+
+  return parseDevToken(token);
 }
 
 export function bearerTokenFromHeader(header?: string | null): string | null {

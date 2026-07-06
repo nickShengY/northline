@@ -3,24 +3,6 @@ import type { OpsEvent } from "@northline/shared";
 import type { Env } from "../types";
 import { verifyEventSignature } from "./signature";
 
-export function validateIncomingEvent(input: unknown) {
-  const parsed = envelopeSchema.safeParse(input);
-  if (!parsed.success) {
-    return { ok: false as const, reason: parsed.error.flatten() };
-  }
-  const payloadResult = validatePayload(parsed.data.event_type, parsed.data.payload_json);
-  if (!payloadResult.ok) {
-    return { ok: false as const, reason: payloadResult.error };
-  }
-  return {
-    ok: true as const,
-    event: {
-      ...parsed.data,
-      payload_json: payloadResult.data
-    }
-  };
-}
-
 /**
  * Validate incoming event with signature verification
  */

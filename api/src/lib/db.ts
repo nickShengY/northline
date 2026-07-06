@@ -1,5 +1,4 @@
 import { neon } from "@neondatabase/serverless";
-import { Client } from "pg";
 import type { Env } from "../types";
 
 export type SqlValue = string | number | boolean | null | object;
@@ -14,14 +13,6 @@ function templateToParameterized(strings: TemplateStringsArray, values: SqlValue
   }
 
   return query;
-}
-
-function prependTenantContext(query: string) {
-  const shifted = query.replace(/\$(\d+)/g, (_, index: string) => `$${Number(index) + 1}`);
-  if (/^\s*with\b/i.test(shifted)) {
-    return shifted.replace(/^\s*with\b/i, "with __northline_tenant as (select set_config('app.tenant_id', $1, true)),");
-  }
-  return `with __northline_tenant as (select set_config('app.tenant_id', $1, true)) ${shifted}`;
 }
 
 export function getSql(env: Env) {
@@ -47,6 +38,7 @@ export async function pingDatabase(env: Env): Promise<void> {
   }
 
   if (shouldUseNodePostgres(env.NEON_DATABASE_URL)) {
+    const { Client } = await import("pg");
     const client = new Client({ connectionString: env.NEON_DATABASE_URL });
     await client.connect();
     try {
@@ -67,6 +59,7 @@ export async function withTenant<T>(
   fn: (sql: SqlQuery) => Promise<T>
 ): Promise<T> {
   if (env.NEON_DATABASE_URL && shouldUseNodePostgres(env.NEON_DATABASE_URL)) {
+    const { Client } = await import("pg");
     const client = new Client({ connectionString: env.NEON_DATABASE_URL });
     await client.connect();
     try {
@@ -86,11 +79,20 @@ export async function withTenant<T>(
 
   const sql = getSql(env);
 
+  // The Neon HTTP driver has no session state, so each statement runs
+  // set_config as its own transaction-local statement in a two-statement
+  // transaction. An unreferenced CTE would never be evaluated by Postgres,
+  // so the GUC would silently stay unset; the explicit transaction batch
+  // guarantees the tenant GUC is applied before the query executes.
+  // All queries additionally carry explicit tenant predicates as
+  // defense in depth.
   const tenantScopedSql: SqlQuery = async (strings, ...values) => {
     const query = templateToParameterized(strings, values);
-    const tenantQuery = prependTenantContext(query);
-    const rows = await sql(tenantQuery, [tenantId, ...values]);
-    return rows as any[];
+    const results = await sql.transaction((txn) => [
+      txn("select set_config('app.tenant_id', $1, true)", [tenantId]),
+      txn(query, values as unknown[])
+    ]);
+    return (results[1] ?? []) as any[];
   };
 
   return fn(tenantScopedSql);
