@@ -2,12 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#0f172a" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#08111f" />
     <meta name="description" content="Northline Tablet Ops - Vessel operations dashboard" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <title>Northline Tablet Ops</title>
+    <style>
+      /* FOUC guard: match the design system background before stylesheets load */
+      html {
+        background-color: #08111f;
+        color: #f1f5f9;
+      }
+      @media (prefers-color-scheme: light) {
+        html {
+          background-color: #f8fafc;
+          color: #0f172a;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

@@ -6,9 +6,8 @@
 }
 
 html, body, #root {
-  height: 100%;
   width: 100%;
-  overflow: hidden;
+  min-height: 100%;
 }
 
 body {
@@ -41,48 +40,20 @@ button, input, select, textarea {
   touch-action: manipulation;
 }
 
-/* Large touch targets for tablet */
-.touch-target {
-  min-height: 48px;
-  min-width: 48px;
+/* Gloves-on tablet: keep action buttons at a comfortable touch size */
+.touch-action-btn {
+  min-height: 44px;
 }
 
-/* Kiosk mode helpers */
-.kiosk-fullscreen {
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
+/* Trip selector sizing inside the flex toolbar */
+.trip-select {
+  flex: 1 1 220px;
+  max-width: 420px;
 }
 
-/* Large display typography */
-.display-large {
-  font-size: 3rem;
-  font-weight: 700;
-  line-height: 1.1;
-}
-
-.display-medium {
-  font-size: 2rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-/* Alert animations */
-@keyframes pulse-critical {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
-.animate-pulse-critical {
-  animation: pulse-critical 0.5s ease-in-out infinite;
-}
-
-/* Status indicators */
-.status-live {
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+/* Gear card spans two columns only when the grid actually has multiple columns */
+@media (min-width: 768px) {
+  .md-col-span-2 {
+    grid-column: span 2 / span 2;
+  }
 }

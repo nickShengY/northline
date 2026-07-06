@@ -21,24 +21,20 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
+      includeAssets: ['icon.svg'],
       manifest: {
         name: 'Northline Tablet Ops',
         short_name: 'TabletOps',
         description: 'Vessel-mounted tablet operations for offshore fishing',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        theme_color: '#08111f',
+        background_color: '#08111f',
         display: 'standalone',
         icons: [
           {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png'
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png'
+            src: 'icon.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any'
           }
         ]
       }

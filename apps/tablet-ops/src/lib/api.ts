@@ -8,6 +8,18 @@ function pathSegment(value: string) {
   return encodeURIComponent(value);
 }
 
+/**
+ * Abort hung requests so the UI can never be stuck in a permanent SYNCING state.
+ */
+const REQUEST_TIMEOUT_MS = 15000;
+
+function requestTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  }
+  return undefined;
+}
+
 function getAuthToken() {
   const token = import.meta.env.DEV
     ? readRuntimeToken() ?? import.meta.env.VITE_API_TOKEN ?? import.meta.env.VITE_DEV_TOKEN ?? defaultDevToken
@@ -34,7 +46,8 @@ async function parseJson<T>(response: Response, label: string): Promise<T> {
 
 export async function getSession() {
   const response = await fetch(`${base}/v1/auth/session`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{
     tenant_id: string;
@@ -46,7 +59,9 @@ export async function getSession() {
 }
 
 export async function getAuthConfig() {
-  const response = await fetch(`${base}/v1/auth/config`);
+  const response = await fetch(`${base}/v1/auth/config`, {
+    signal: requestTimeoutSignal()
+  });
   return parseJson<{
     enabled: boolean;
     login_url: string | null;
@@ -57,14 +72,16 @@ export async function getAuthConfig() {
 
 export async function listTrips() {
   const response = await fetch(`${base}/v1/ops/trips`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{ trips: Array<{ trip_id: string; status: string; mode: string }> }>(response, "Trip list");
 }
 
-export async function getTripGear(tripId: string) {
-  const response = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}?mode=OFFSHORE`, {
-    headers: { Authorization: authHeader.Authorization }
+export async function getTripGear(tripId: string, mode: "OFFSHORE" | "ICE" = "OFFSHORE") {
+  const response = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}?mode=${mode}`, {
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{
     gear: Array<{
@@ -81,18 +98,21 @@ export async function transitionTripGear(input: {
   gear_id: string;
   transition: "SET" | "CHECKED" | "HAULED" | "MISSING" | "RECOVERED" | "REMOVED";
   note?: string;
+  mode?: "OFFSHORE" | "ICE";
 }) {
   const response = await fetch(`${base}/v1/gear/transition`, {
     method: "POST",
     headers: authHeader,
-    body: JSON.stringify({ mode: "OFFSHORE", ...input })
+    signal: requestTimeoutSignal(),
+    body: JSON.stringify({ ...input, mode: input.mode ?? "OFFSHORE" })
   });
   return parseJson(response, "Gear transition");
 }
 
 export async function listDevices() {
   const response = await fetch(`${base}/v1/sync/devices`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{
     devices: Array<{
@@ -108,7 +128,8 @@ export async function listDevices() {
 
 export async function getOpenIncidents() {
   const response = await fetch(`${base}/v1/safety/incidents/open`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{
     incidents: Array<{
@@ -132,6 +153,7 @@ export async function scoreRisk(input: {
   const response = await fetch(`${base}/v1/safety/risk/score`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   return parseJson<{ score: number; tier: "LOW" | "MODERATE" | "HIGH" | "CRITICAL" }>(response, "Risk score");
@@ -149,6 +171,7 @@ export async function reportHazard(input: {
   const response = await fetch(`${base}/v1/safety/hazard/report`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   return parseJson(response, "Hazard report");
