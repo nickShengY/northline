@@ -118,7 +118,7 @@ export const RiskBadge: React.FC<RiskBadgeProps> = ({
   return (
     <Badge variant={tierConfig[tier]} {...props}>
       {tier}
-      {score !== undefined && <span className="opacity-75">({score})</span>}
+      {score !== undefined && <span className="opacity-75">({Math.round(score)})</span>}
     </Badge>
   );
 };

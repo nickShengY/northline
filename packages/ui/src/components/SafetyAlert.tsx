@@ -64,14 +64,34 @@ const typeConfig: Record<SafetyAlertType, { icon: React.ReactNode; label: string
 };
 
 const severityConfig: Record<string, { color: string; bgColor: string; borderColor: string }> = {
-  low: { color: 'var(--info)', bgColor: 'rgba(0, 212, 255, 0.1)', borderColor: 'rgba(0, 212, 255, 0.3)' },
-  medium: { color: 'var(--warning)', bgColor: 'rgba(245, 158, 11, 0.1)', borderColor: 'rgba(245, 158, 11, 0.3)' },
-  high: { color: 'var(--danger)', bgColor: 'rgba(239, 68, 68, 0.15)', borderColor: 'rgba(239, 68, 68, 0.4)' },
-  critical: { color: '#ff0000', bgColor: 'rgba(255, 0, 0, 0.2)', borderColor: 'rgba(255, 0, 0, 0.6)' },
+  low: {
+    color: 'var(--info)',
+    bgColor: 'color-mix(in srgb, var(--info) 10%, transparent)',
+    borderColor: 'color-mix(in srgb, var(--info) 30%, transparent)',
+  },
+  medium: {
+    color: 'var(--warning)',
+    bgColor: 'color-mix(in srgb, var(--warning) 10%, transparent)',
+    borderColor: 'color-mix(in srgb, var(--warning) 30%, transparent)',
+  },
+  high: {
+    color: 'var(--danger)',
+    bgColor: 'color-mix(in srgb, var(--danger) 15%, transparent)',
+    borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)',
+  },
+  critical: {
+    color: 'var(--danger)',
+    bgColor: 'color-mix(in srgb, var(--danger) 20%, transparent)',
+    borderColor: 'color-mix(in srgb, var(--danger) 60%, transparent)',
+  },
 };
 
 const defaultTypeConfig = { icon: null, label: 'Alert' };
-const defaultSeverityConfig = { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.2)', borderColor: 'rgba(245, 158, 11, 0.6)' };
+const defaultSeverityConfig = {
+  color: 'var(--warning)',
+  bgColor: 'color-mix(in srgb, var(--warning) 20%, transparent)',
+  borderColor: 'color-mix(in srgb, var(--warning) 60%, transparent)',
+};
 
 export const SafetyAlert: React.FC<SafetyAlertProps> = ({
   type,
@@ -92,6 +112,7 @@ export const SafetyAlert: React.FC<SafetyAlertProps> = ({
 
   return (
     <div
+      role="alert"
       className={clsx(
         'relative overflow-hidden rounded-[var(--radius-xl)] border-2 backdrop-blur-sm',
         'transition-all duration-[var(--transition-base)]',
@@ -105,6 +126,7 @@ export const SafetyAlert: React.FC<SafetyAlertProps> = ({
       {/* Critical glow effect */}
       {isCritical && (
         <div
+          aria-hidden="true"
           className="absolute inset-0 opacity-30"
           style={{
             background: `radial-gradient(circle at center, ${sevConf.color}, transparent 70%)`,
@@ -142,7 +164,7 @@ export const SafetyAlert: React.FC<SafetyAlertProps> = ({
           </div>
 
           {severity === 'critical' && (
-            <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-red-500/20 text-red-400 text-sm font-bold animate-pulse">
+            <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--danger)]/20 text-[var(--danger)] text-sm font-bold animate-pulse">
               CRITICAL
             </div>
           )}
@@ -213,18 +235,27 @@ export interface MOBAlertProps {
 }
 
 export const MOBAlert: React.FC<MOBAlertProps> = ({
+  vesselName,
   coordinates,
   timeInWater = 0,
   onDeployMarker,
   onAlertCrew,
   onCallEmergency,
 }) => {
+  // Tick elapsed time locally so "person in water" duration stays live.
+  const [elapsed, setElapsed] = React.useState(0);
+  React.useEffect(() => {
+    setElapsed(0);
+    const interval = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(interval);
+  }, [timeInWater]);
+
   return (
     <SafetyAlert
       type="mob"
       severity="critical"
-      title="MAN OVERBOARD DETECTED"
-      message={`Person in water for ${formatDuration(timeInWater)}`}
+      title={vesselName ? `MAN OVERBOARD — ${vesselName}` : 'MAN OVERBOARD DETECTED'}
+      message={`Person in water for ${formatDuration(timeInWater + elapsed)}`}
       location={coordinates ? `${coordinates.lat.toFixed(4)}°N, ${coordinates.lng.toFixed(4)}°W` : undefined}
       onRespond={onCallEmergency}
     >

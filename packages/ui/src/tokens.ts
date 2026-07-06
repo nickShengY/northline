@@ -1,74 +1,77 @@
 /**
  * Northline Design Tokens
- * Futuristic maritime operations aesthetic
+ *
+ * Mirrors the canonical values declared in `styles.css :root`. Keep the two
+ * in sync — the stylesheet is what ships to the browser; these constants are
+ * for programmatic use (charts, canvas, exports).
  */
 
 export const colors = {
-  // Core backgrounds - Deep ocean/space theme
+  // Core backgrounds - deep maritime theme
   bg: {
-    primary: '#050811',
-    secondary: '#0a1220',
-    tertiary: '#111a2e',
-    elevated: '#162035',
-    glass: 'rgba(17, 26, 46, 0.7)',
-    glassHover: 'rgba(22, 32, 53, 0.85)',
+    primary: '#08111f',
+    secondary: '#0d1828',
+    tertiary: '#122033',
+    elevated: '#17263a',
+    glass: 'rgba(17, 31, 49, 0.82)',
+    glassHover: 'rgba(24, 41, 62, 0.94)',
   },
 
   // Text colors
   ink: {
-    primary: '#ffffff',
-    secondary: '#a0aec0',
-    muted: '#64748b',
-    inverse: '#050811',
+    primary: '#f4f8fb',
+    secondary: '#b7c8d7',
+    muted: '#7d93a7',
+    inverse: '#07111f',
   },
 
-  // Accent colors - Futuristic maritime palette
+  // Accent colors
   accent: {
-    cyan: '#00d4ff',
-    teal: '#40e0b7',
-    purple: '#a855f7',
-    pink: '#ec4899',
+    cyan: '#38bdf8',
+    teal: '#2dd4bf',
+    purple: '#7c8fa5',
+    pink: '#fb7185',
     warm: '#f59e0b',
   },
 
   // Semantic colors
   semantic: {
-    success: '#10b981',
+    success: '#22c55e',
     warning: '#f59e0b',
     danger: '#ef4444',
-    info: '#00d4ff',
+    info: '#38bdf8',
   },
 
   // Border colors
   border: {
-    default: 'rgba(255, 255, 255, 0.08)',
-    hover: 'rgba(0, 212, 255, 0.3)',
-    active: 'rgba(0, 212, 255, 0.5)',
-    glass: 'rgba(255, 255, 255, 0.14)',
+    default: 'rgba(148, 163, 184, 0.24)',
+    hover: 'rgba(56, 189, 248, 0.45)',
+    active: 'rgba(56, 189, 248, 0.6)',
+    glass: 'rgba(148, 163, 184, 0.18)',
   },
 
   // Special effects
   glow: {
-    cyan: 'rgba(0, 212, 255, 0.35)',
-    teal: 'rgba(64, 224, 183, 0.35)',
-    purple: 'rgba(168, 85, 247, 0.35)',
+    cyan: 'rgba(56, 189, 248, 0.28)',
+    teal: 'rgba(45, 212, 191, 0.26)',
+    purple: 'rgba(124, 143, 165, 0.3)',
   },
 } as const;
 
 export const gradients = {
-  primary: 'linear-gradient(135deg, #00d4ff 0%, #40e0b7 50%, #a855f7 100%)',
-  warm: 'linear-gradient(135deg, #f59e0b 0%, #ec4899 100%)',
-  cool: 'linear-gradient(135deg, #00d4ff 0%, #a855f7 100%)',
-  success: 'linear-gradient(135deg, #10b981 0%, #40e0b7 100%)',
-  danger: 'linear-gradient(135deg, #ef4444 0%, #ec4899 100%)',
-  glass: 'linear-gradient(180deg, rgba(17, 26, 46, 0.8) 0%, rgba(11, 17, 32, 0.9) 100%)',
+  primary: 'linear-gradient(135deg, #38bdf8 0%, #2dd4bf 100%)',
+  warm: 'linear-gradient(135deg, #f59e0b 0%, #fb7185 100%)',
+  cool: 'linear-gradient(135deg, #38bdf8 0%, #7c8fa5 100%)',
+  success: 'linear-gradient(135deg, #22c55e 0%, #2dd4bf 100%)',
+  danger: 'linear-gradient(135deg, #fb7185 0%, #ef4444 100%)',
+  glass: 'linear-gradient(180deg, rgba(17, 31, 49, 0.82) 0%, rgba(13, 24, 40, 0.9) 100%)',
 } as const;
 
 export const typography = {
   fontFamily: {
-    display: '"Space Grotesk", "Inter", system-ui, sans-serif',
-    body: '"Inter", "Sora", system-ui, sans-serif',
-    mono: '"JetBrains Mono", "Fira Code", monospace',
+    display: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    body: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    mono: "'JetBrains Mono', 'Fira Code', monospace",
   },
 
   fontSize: {
@@ -124,31 +127,31 @@ export const spacing = {
 
 export const borderRadius = {
   none: '0',
-  sm: '6px',
-  md: '10px',
-  lg: '14px',
-  xl: '20px',
-  '2xl': '28px',
+  sm: '0.25rem',
+  md: '0.5rem',
+  lg: '0.75rem',
+  xl: '1rem',
+  '2xl': '1.5rem',
   full: '9999px',
 } as const;
 
 export const shadows = {
-  sm: '0 2px 4px rgba(0, 0, 0, 0.3)',
-  md: '0 4px 12px rgba(0, 0, 0, 0.4)',
-  lg: '0 8px 24px rgba(0, 0, 0, 0.5)',
-  xl: '0 16px 40px rgba(0, 0, 0, 0.6)',
-  glass: '0 8px 32px rgba(0, 0, 0, 0.4)',
+  sm: '0 1px 2px rgba(1, 10, 20, 0.24)',
+  md: '0 8px 18px rgba(1, 10, 20, 0.24)',
+  lg: '0 18px 36px rgba(1, 10, 20, 0.28)',
+  xl: '0 26px 54px rgba(1, 10, 20, 0.34)',
+  glass: '0 18px 36px rgba(1, 10, 20, 0.28)',
   glow: {
-    cyan: '0 0 20px rgba(0, 212, 255, 0.4)',
-    teal: '0 0 20px rgba(64, 224, 183, 0.4)',
-    purple: '0 0 20px rgba(168, 85, 247, 0.4)',
+    cyan: '0 0 0 1px rgba(56, 189, 248, 0.28), 0 18px 42px rgba(6, 78, 116, 0.24)',
+    teal: '0 0 0 1px rgba(45, 212, 191, 0.26), 0 18px 42px rgba(15, 118, 110, 0.22)',
+    purple: '0 0 20px rgba(124, 143, 165, 0.4)',
   },
 } as const;
 
 export const transitions = {
-  fast: '150ms cubic-bezier(0.4, 0, 0.2, 1)',
-  base: '250ms cubic-bezier(0.4, 0, 0.2, 1)',
-  slow: '350ms cubic-bezier(0.4, 0, 0.2, 1)',
+  fast: '150ms ease',
+  base: '200ms ease',
+  slow: '300ms ease',
   spring: '500ms cubic-bezier(0.34, 1.56, 0.64, 1)',
 } as const;
 
@@ -163,106 +166,14 @@ export const breakpoints = {
 
 export const zIndex = {
   base: 0,
-  dropdown: 100,
-  sticky: 200,
-  modal: 300,
-  popover: 400,
-  toast: 500,
-  tooltip: 600,
-  modalOverlay: 700,
-  top: 9999,
+  dropdown: 1000,
+  sticky: 1020,
+  fixed: 1030,
+  modal: 1040,
+  popover: 1050,
+  tooltip: 1060,
+  toast: 1070,
 } as const;
-
-// CSS Variables for runtime use
-export const cssVariables = `
-:root {
-  /* Colors */
-  --bg-primary: ${colors.bg.primary};
-  --bg-secondary: ${colors.bg.secondary};
-  --bg-tertiary: ${colors.bg.tertiary};
-  --bg-elevated: ${colors.bg.elevated};
-  --bg-glass: ${colors.bg.glass};
-  --bg-glass-hover: ${colors.bg.glassHover};
-
-  --ink-primary: ${colors.ink.primary};
-  --ink-secondary: ${colors.ink.secondary};
-  --ink-muted: ${colors.ink.muted};
-  --ink-inverse: ${colors.ink.inverse};
-
-  --accent-cyan: ${colors.accent.cyan};
-  --accent-teal: ${colors.accent.teal};
-  --accent-purple: ${colors.accent.purple};
-  --accent-pink: ${colors.accent.pink};
-  --accent-warm: ${colors.accent.warm};
-
-  --success: ${colors.semantic.success};
-  --warning: ${colors.semantic.warning};
-  --danger: ${colors.semantic.danger};
-  --info: ${colors.semantic.info};
-
-  --border-default: ${colors.border.default};
-  --border-hover: ${colors.border.hover};
-  --border-active: ${colors.border.active};
-  --border-glass: ${colors.border.glass};
-
-  --glow-cyan: ${colors.glow.cyan};
-  --glow-teal: ${colors.glow.teal};
-  --glow-purple: ${colors.glow.purple};
-
-  /* Gradients */
-  --gradient-primary: ${gradients.primary};
-  --gradient-warm: ${gradients.warm};
-  --gradient-cool: ${gradients.cool};
-  --gradient-success: ${gradients.success};
-  --gradient-danger: ${gradients.danger};
-
-  /* Typography */
-  --font-display: ${typography.fontFamily.display};
-  --font-body: ${typography.fontFamily.body};
-  --font-mono: ${typography.fontFamily.mono};
-
-  /* Spacing */
-  --space-1: ${spacing[1]};
-  --space-2: ${spacing[2]};
-  --space-3: ${spacing[3]};
-  --space-4: ${spacing[4]};
-  --space-5: ${spacing[5]};
-  --space-6: ${spacing[6]};
-  --space-8: ${spacing[8]};
-  --space-10: ${spacing[10]};
-  --space-12: ${spacing[12]};
-
-  /* Border Radius */
-  --radius-sm: ${borderRadius.sm};
-  --radius-md: ${borderRadius.md};
-  --radius-lg: ${borderRadius.lg};
-  --radius-xl: ${borderRadius.xl};
-  --radius-full: ${borderRadius.full};
-
-  /* Shadows */
-  --shadow-sm: ${shadows.sm};
-  --shadow-md: ${shadows.md};
-  --shadow-lg: ${shadows.lg};
-  --shadow-xl: ${shadows.xl};
-  --shadow-glass: ${shadows.glass};
-  --shadow-glow-cyan: ${shadows.glow.cyan};
-  --shadow-glow-teal: ${shadows.glow.teal};
-
-  /* Transitions */
-  --transition-fast: ${transitions.fast};
-  --transition-base: ${transitions.base};
-  --transition-slow: ${transitions.slow};
-  --transition-spring: ${transitions.spring};
-
-  /* Z-Index */
-  --z-dropdown: ${zIndex.dropdown};
-  --z-sticky: ${zIndex.sticky};
-  --z-modal: ${zIndex.modal};
-  --z-popover: ${zIndex.popover};
-  --z-toast: ${zIndex.toast};
-  --z-tooltip: ${zIndex.tooltip};
-}
-`;
 
 export type ColorVariant = keyof typeof colors.semantic | 'cyan' | 'teal' | 'purple' | 'pink' | 'warm';
 export type Size = 'sm' | 'md' | 'lg' | 'xl';

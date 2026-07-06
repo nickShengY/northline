@@ -69,8 +69,9 @@ export function Table<T extends Record<string, unknown>>({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin w-8 h-8 border-2 border-[var(--accent-cyan)] border-t-transparent rounded-full" />
+      <div role="status" className="flex items-center justify-center py-12">
+        <div aria-hidden="true" className="animate-spin w-8 h-8 border-2 border-[var(--accent-cyan)] border-t-transparent rounded-full" />
+        <span className="sr-only">Loading table data</span>
       </div>
     );
   }
@@ -91,6 +92,7 @@ export function Table<T extends Record<string, unknown>>({
             {columns.map((col) => (
               <th
                 key={String(col.key)}
+                scope="col"
                 className={clsx(
                   cellPadding[size],
                   'font-semibold text-[var(--ink-secondary)] text-left',
@@ -112,13 +114,24 @@ export function Table<T extends Record<string, unknown>>({
             return (
               <tr
                 key={key}
-                onClick={() => onRowClick?.(row)}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onRowClick(row);
+                        }
+                      }
+                    : undefined
+                }
+                tabIndex={onRowClick ? 0 : undefined}
+                data-selected={isSelected || undefined}
                 className={clsx(
                   'border-b border-[var(--border-default)] last:border-b-0 transition-colors',
                   striped && rowIndex % 2 === 1 && 'bg-[var(--bg-secondary)]/30',
-                  hoverable && 'hover:bg-[var(--bg-glass)] cursor-pointer',
-                  isSelected && 'bg-[var(--accent-cyan)]/10',
-                  onRowClick && 'cursor-pointer'
+                  hoverable && onRowClick && 'hover:bg-[var(--bg-glass)] cursor-pointer',
+                  isSelected && 'bg-[var(--accent-cyan)]/10'
                 )}
               >
                 {columns.map((col) => {
@@ -163,29 +176,38 @@ export function DataTable<T extends Record<string, unknown>>({
   onPageChange,
   ...tableProps
 }: DataTableProps<T>) {
-  const totalPages = totalItems ? Math.ceil(totalItems / pageSize) : 1;
+  // When totalItems is provided the caller paginates server-side; otherwise
+  // slice the supplied data client-side.
+  const effectiveTotal = totalItems ?? tableProps.data.length;
+  const totalPages = effectiveTotal > 0 ? Math.ceil(effectiveTotal / pageSize) : 1;
+  const pageData =
+    totalItems !== undefined
+      ? tableProps.data
+      : tableProps.data.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="space-y-4">
-      <Table {...tableProps} />
+      <Table {...tableProps} data={pageData} />
 
-      {totalItems && totalPages > 1 && (
-        <div className="flex items-center justify-between px-4">
+      {effectiveTotal > 0 && totalPages > 1 && (
+        <nav aria-label="Table pagination" className="flex items-center justify-between px-4">
           <span className="text-sm text-[var(--ink-muted)]">
-            Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalItems)} of {totalItems}
+            Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, effectiveTotal)} of {effectiveTotal}
           </span>
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => onPageChange?.(currentPage - 1)}
               disabled={currentPage <= 1}
               className="px-3 py-1 rounded-[var(--radius-md)] text-sm bg-[var(--bg-glass)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--bg-elevated)]"
             >
               Previous
             </button>
-            <span className="text-sm text-[var(--ink-secondary)]">
+            <span aria-live="polite" className="text-sm text-[var(--ink-secondary)]">
               Page {currentPage} of {totalPages}
             </span>
             <button
+              type="button"
               onClick={() => onPageChange?.(currentPage + 1)}
               disabled={currentPage >= totalPages}
               className="px-3 py-1 rounded-[var(--radius-md)] text-sm bg-[var(--bg-glass)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--bg-elevated)]"
@@ -193,7 +215,7 @@ export function DataTable<T extends Record<string, unknown>>({
               Next
             </button>
           </div>
-        </div>
+        </nav>
       )}
     </div>
   );

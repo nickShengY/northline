@@ -28,6 +28,8 @@ export const Spinner: React.FC<SpinnerProps> = ({
 }) => {
   return (
     <svg
+      role="status"
+      aria-label="Loading"
       className={clsx('animate-spin', sizeClasses[size], colorClasses[variant], className)}
       viewBox="0 0 24 24"
       fill="none"
@@ -62,7 +64,7 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div role="status" aria-live="polite" className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="flex flex-col items-center gap-4 p-8 rounded-[var(--radius-xl)] bg-[var(--bg-elevated)] border border-[var(--border-default)]">
         <Spinner size="xl" />
         <p className="text-[var(--ink-secondary)] animate-pulse">{message}</p>
@@ -101,6 +103,7 @@ export const Skeleton: React.FC<SkeletonProps> = ({
 
   return (
     <div
+      aria-hidden="true"
       className={clsx(
         'bg-[var(--bg-secondary)]',
         variantClasses[variant],

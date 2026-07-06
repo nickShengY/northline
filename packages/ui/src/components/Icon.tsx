@@ -18,6 +18,8 @@ import {
   Copy,
   Download,
   Edit,
+  Eye,
+  EyeOff,
   Filter,
   Fish,
   Flame,
@@ -78,6 +80,8 @@ const iconMap = {
   Copy,
   Download,
   Edit,
+  Eye,
+  EyeOff,
   Filter,
   Fish,
   Flame,
@@ -129,6 +133,8 @@ export interface IconProps {
   color?: string;
   className?: string;
   spin?: boolean;
+  /** Accessible name. Omit for decorative icons (hidden from screen readers). */
+  label?: string;
 }
 
 export const Icon: React.FC<IconProps> = ({
@@ -137,15 +143,21 @@ export const Icon: React.FC<IconProps> = ({
   color,
   className,
   spin = false,
+  label,
 }) => {
   const LucideIcon = iconMap[name] as React.ComponentType<{
     size?: number;
     color?: string;
     className?: string;
+    'aria-hidden'?: boolean;
+    'aria-label'?: string;
+    role?: string;
   }>;
 
+  // Guard against unchecked casts from data-driven icon names: degrade to
+  // nothing instead of crashing the tree with an invalid element type.
   if (!LucideIcon) {
-    console.warn(`Icon "${name}" not found in lucide-react`);
+    console.warn(`Icon "${name}" not found in lucide-react icon map`);
     return null;
   }
 
@@ -153,6 +165,9 @@ export const Icon: React.FC<IconProps> = ({
     <LucideIcon
       size={size}
       color={color}
+      aria-hidden={label ? undefined : true}
+      aria-label={label}
+      role={label ? 'img' : undefined}
       className={clsx(spin && 'animate-spin', className)}
     />
   );
@@ -229,6 +244,7 @@ export const IconButton: React.FC<IconButtonProps> = ({
 
   return (
     <button
+      type="button"
       aria-label={label}
       title={label}
       className={clsx(

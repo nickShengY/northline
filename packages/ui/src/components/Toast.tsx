@@ -8,6 +8,7 @@ export interface Toast {
   type: ToastType;
   title: string;
   message?: string;
+  /** Auto-dismiss delay in ms. Pass 0 to keep the toast until dismissed. */
   duration?: number;
 }
 
@@ -18,7 +19,7 @@ export interface ToastProps extends Toast {
 const typeConfig: Record<ToastType, { icon: React.ReactNode; className: string }> = {
   success: {
     icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <svg aria-hidden="true" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
       </svg>
     ),
@@ -26,7 +27,7 @@ const typeConfig: Record<ToastType, { icon: React.ReactNode; className: string }
   },
   error: {
     icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <svg aria-hidden="true" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
       </svg>
     ),
@@ -34,7 +35,7 @@ const typeConfig: Record<ToastType, { icon: React.ReactNode; className: string }
   },
   warning: {
     icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <svg aria-hidden="true" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
       </svg>
     ),
@@ -42,7 +43,7 @@ const typeConfig: Record<ToastType, { icon: React.ReactNode; className: string }
   },
   info: {
     icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <svg aria-hidden="true" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
     ),
@@ -62,17 +63,25 @@ export const ToastItem: React.FC<ToastProps> = ({
   type,
   title,
   message,
+  duration = 5000,
   onClose,
 }) => {
   const config = typeConfig[type];
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  const [paused, setPaused] = React.useState(false);
 
   React.useEffect(() => {
-    const timer = setTimeout(() => onClose(id), 5000);
+    if (duration === 0 || paused) return;
+    const timer = setTimeout(() => onCloseRef.current(id), duration);
     return () => clearTimeout(timer);
-  }, [id, onClose]);
+  }, [id, duration, paused]);
 
   return (
     <div
+      role={type === 'error' || type === 'warning' ? 'alert' : 'status'}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
       className={clsx(
         'flex items-start gap-3 p-4 rounded-[var(--radius-lg)] border backdrop-blur-sm',
         'animate-slide-in-right shadow-lg',
@@ -87,10 +96,12 @@ export const ToastItem: React.FC<ToastProps> = ({
         )}
       </div>
       <button
+        type="button"
         onClick={() => onClose(id)}
+        aria-label="Dismiss notification"
         className="p-1 rounded hover:bg-white/10 text-[var(--ink-muted)] transition-all"
       >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg aria-hidden="true" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
@@ -119,8 +130,10 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({
 }) => {
   return (
     <div
+      role="region"
+      aria-label="Notifications"
       className={clsx(
-        'fixed z-[var(--z-toast)] flex flex-col gap-2 w-80',
+        'fixed z-[var(--z-toast)] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]',
         positionClasses[position]
       )}
     >
@@ -136,8 +149,20 @@ export const useToast = () => {
   const [toasts, setToasts] = React.useState<Toast[]>([]);
 
   const addToast = React.useCallback((toast: Omit<Toast, 'id'>) => {
-    const id = Math.random().toString(36).slice(2, 9);
-    setToasts((prev) => [...prev, { ...toast, id }]);
+    const id = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2, 9);
+    setToasts((prev) => {
+      // Cap the stack at 5, evicting oldest auto-dismissing toasts first;
+      // persistent toasts (duration 0) are never silently dropped.
+      const next = [...prev, { ...toast, id }];
+      let overflow = next.length - 5;
+      if (overflow <= 0) return next;
+      return next.filter((t) => {
+        if (overflow <= 0 || t.duration === 0) return true;
+        overflow -= 1;
+        return false;
+      });
+    });
+    return id;
   }, []);
 
   const removeToast = React.useCallback((id: string) => {
@@ -164,6 +189,12 @@ export const useToast = () => {
     [addToast]
   );
 
+  // A ready-to-render element (stable component type, so re-renders update
+  // rather than remount the toast stack).
+  const container = (
+    <ToastContainer toasts={toasts} onClose={removeToast} />
+  );
+
   return {
     toasts,
     addToast,
@@ -172,8 +203,8 @@ export const useToast = () => {
     error,
     warning,
     info,
-    ToastContainer: () => <ToastContainer toasts={toasts} onClose={removeToast} />,
+    container,
   };
 };
 
-export default Toast;
+export default ToastItem;

@@ -40,7 +40,30 @@ export const List: React.FC<ListProps> = ({
       {items.map((item) => (
         <li
           key={item.id}
-          onClick={() => !item.disabled && onSelect?.(item.id)}
+          onClick={
+            onSelect && !item.disabled
+              ? (e) => {
+                  // Ignore activations that came from a nested control
+                  // (item.actions buttons, links, inputs).
+                  const interactive = (e.target as HTMLElement).closest('button, a, input, select, textarea, label');
+                  if (interactive && interactive !== e.currentTarget) return;
+                  onSelect(item.id);
+                }
+              : undefined
+          }
+          onKeyDown={
+            onSelect && !item.disabled
+              ? (e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(item.id);
+                  }
+                }
+              : undefined
+          }
+          tabIndex={onSelect && !item.disabled ? 0 : undefined}
+          aria-disabled={onSelect && item.disabled ? true : undefined}
           className={clsx(
             'flex items-center gap-4 transition-all duration-[var(--transition-fast)]',
             variant === 'default' && 'px-4 py-3',
@@ -95,7 +118,7 @@ export const ActivityList: React.FC<{ items: ActivityItem[]; className?: string 
   };
 
   return (
-    <div className={clsx('space-y-3', className)}>
+    <div role="log" aria-label="Activity feed" className={clsx('space-y-3', className)}>
       {items.map((item) => (
         <div
           key={item.id}

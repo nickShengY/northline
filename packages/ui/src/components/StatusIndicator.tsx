@@ -9,12 +9,12 @@ export interface StatusIndicatorProps {
 }
 
 const statusConfig: Record<string, { color: string; bgColor: string }> = {
-  online: { color: 'var(--success)', bgColor: 'rgba(16, 185, 129, 0.15)' },
-  offline: { color: 'var(--ink-muted)', bgColor: 'rgba(100, 116, 139, 0.15)' },
-  syncing: { color: 'var(--accent-cyan)', bgColor: 'rgba(0, 212, 255, 0.15)' },
-  error: { color: 'var(--danger)', bgColor: 'rgba(239, 68, 68, 0.15)' },
-  warning: { color: 'var(--warning)', bgColor: 'rgba(245, 158, 11, 0.15)' },
-  idle: { color: 'var(--ink-muted)', bgColor: 'rgba(100, 116, 139, 0.1)' },
+  online: { color: 'var(--success)', bgColor: 'color-mix(in srgb, var(--success) 15%, transparent)' },
+  offline: { color: 'var(--ink-muted)', bgColor: 'color-mix(in srgb, var(--ink-muted) 15%, transparent)' },
+  syncing: { color: 'var(--accent-cyan)', bgColor: 'color-mix(in srgb, var(--accent-cyan) 15%, transparent)' },
+  error: { color: 'var(--danger)', bgColor: 'color-mix(in srgb, var(--danger) 15%, transparent)' },
+  warning: { color: 'var(--warning)', bgColor: 'color-mix(in srgb, var(--warning) 15%, transparent)' },
+  idle: { color: 'var(--ink-muted)', bgColor: 'color-mix(in srgb, var(--ink-muted) 10%, transparent)' },
 };
 
 const sizeConfig: Record<string, { dot: string; text: string }> = {
@@ -23,7 +23,7 @@ const sizeConfig: Record<string, { dot: string; text: string }> = {
   lg: { dot: 'w-3 h-3', text: 'text-base' },
 };
 
-const defaultStatusConfig = { color: 'var(--ink-muted)', bgColor: 'rgba(100, 116, 139, 0.1)' };
+const defaultStatusConfig = { color: 'var(--ink-muted)', bgColor: 'color-mix(in srgb, var(--ink-muted) 10%, transparent)' };
 const defaultSizeConfig = { dot: 'w-2.5 h-2.5', text: 'text-sm' };
 
 export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
@@ -36,8 +36,9 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   const sizes = sizeConfig[size] ?? defaultSizeConfig;
 
   return (
-    <div className="inline-flex items-center gap-2">
+    <div role="status" aria-label={label ? undefined : `Status: ${status}`} className="inline-flex items-center gap-2">
       <span
+        aria-hidden="true"
         className={clsx(
           'rounded-full',
           sizes.dot,

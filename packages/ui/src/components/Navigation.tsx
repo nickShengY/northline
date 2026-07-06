@@ -37,8 +37,10 @@ export const Navigation: React.FC<NavigationProps> = ({
       {items.map((item) => (
         <button
           key={item.id}
+          type="button"
           onClick={() => !item.disabled && onSelect(item.id)}
           disabled={item.disabled}
+          aria-current={activeId === item.id ? 'page' : undefined}
           className={clsx(
             'flex items-center gap-2 px-4 py-2.5 rounded-[var(--radius-md)] font-medium transition-all',
             'duration-[var(--transition-base)] cursor-pointer',
@@ -76,9 +78,7 @@ export const Navigation: React.FC<NavigationProps> = ({
 };
 
 // Bottom Navigation - for mobile apps
-export interface BottomNavItem extends NavItem {
-  href?: string;
-}
+export type BottomNavItem = NavItem;
 
 export interface BottomNavigationProps {
   items: BottomNavItem[];
@@ -92,26 +92,31 @@ export const BottomNavigation: React.FC<BottomNavigationProps> = ({
   onSelect,
 }) => {
   return (
-    <nav className="bottom-navigation sticky bottom-0 z-[var(--z-sticky)] mt-6 bg-[var(--bg-elevated)]/95 backdrop-blur-lg border border-[var(--border-default)] rounded-[var(--radius-lg)]">
+    <nav aria-label="Primary" className="bottom-navigation sticky bottom-0 z-[var(--z-sticky)] mt-6 bg-[var(--bg-elevated)]/95 backdrop-blur-lg border border-[var(--border-default)] rounded-[var(--radius-lg)]">
       <div className="flex items-center justify-around max-w-lg mx-auto px-2 py-2">
         {items.map((item) => (
           <button
             key={item.id}
+            type="button"
             onClick={() => !item.disabled && onSelect(item.id)}
             disabled={item.disabled}
+            aria-current={activeId === item.id ? 'page' : undefined}
             className={clsx(
-              'flex flex-col items-center gap-1 px-3 py-2 rounded-[var(--radius-md)] transition-all',
-              'duration-[var(--transition-fast)] min-w-[64px]',
+              'relative flex flex-col items-center gap-1 px-3 py-2 rounded-[var(--radius-md)] transition-all',
+              'duration-[var(--transition-fast)] min-w-[64px] min-h-[44px]',
               activeId === item.id
                 ? 'text-[var(--accent-cyan)]'
                 : 'text-[var(--ink-muted)] hover:text-[var(--ink-secondary)]',
               item.disabled && 'opacity-50 cursor-not-allowed'
             )}
           >
-            <span className="text-xl">{item.icon}</span>
+            <span aria-hidden="true" className="text-xl">{item.icon}</span>
             <span className="text-xs font-medium">{item.label}</span>
             {item.badge !== undefined && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center text-[10px] rounded-full bg-[var(--danger)] text-white">
+              <span
+                aria-label={`${item.badge} pending`}
+                className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center text-[10px] rounded-full bg-[var(--danger)] text-white"
+              >
                 {item.badge}
               </span>
             )}
@@ -157,8 +162,11 @@ export const SidebarNavigation: React.FC<SidebarNavigationProps> = ({
         {items.map((item) => (
           <button
             key={item.id}
+            type="button"
             onClick={() => !item.disabled && onSelect(item.id)}
             disabled={item.disabled}
+            aria-current={activeId === item.id ? 'page' : undefined}
+            aria-label={collapsed ? item.label : undefined}
             title={collapsed ? item.label : undefined}
             className={clsx(
               'flex items-center gap-3 w-full px-3 py-2.5 rounded-[var(--radius-md)] transition-all',
@@ -210,11 +218,11 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
   className,
 }) => {
   return (
-    <nav className={clsx('flex items-center gap-2 text-sm', className)}>
+    <nav aria-label="Breadcrumb" className={clsx('flex items-center gap-2 text-sm', className)}>
       {items.map((item, i) => (
-        <React.Fragment key={i}>
+        <React.Fragment key={`${item.label}-${i}`}>
           {i > 0 && (
-            <svg className="w-4 h-4 text-[var(--ink-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg aria-hidden="true" className="w-4 h-4 text-[var(--ink-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           )}

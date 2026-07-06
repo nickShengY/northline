@@ -39,6 +39,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       fullWidth = false,
       glow = false,
       disabled,
+      type = 'button',
       children,
       ...props
     },
@@ -47,21 +48,20 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
+        type={type}
         disabled={disabled || loading}
+        aria-busy={loading || undefined}
         className={clsx(
-          'inline-flex items-center justify-center gap-2 rounded-[var(--radius-md)] font-medium transition-all duration-[var(--transition-base)] relative overflow-hidden',
+          'inline-flex items-center justify-center gap-2 rounded-[var(--radius-md)] font-medium transition-all duration-[var(--transition-base)] relative overflow-hidden hover-shine',
           sizeClasses[size],
           variantClasses[variant],
           fullWidth && 'w-full',
-          glow && 'animate-pulse-glow',
+          glow && 'animate-glow-pulse',
           (disabled || loading) && 'opacity-70 cursor-not-allowed pointer-events-none',
           className
         )}
         {...props}
       >
-        {/* Shine effect on hover */}
-        <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
-
         {loading ? (
           <svg className="animate-spin h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />

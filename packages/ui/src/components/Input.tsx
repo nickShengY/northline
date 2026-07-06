@@ -25,7 +25,9 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     },
     ref
   ) => {
-    const inputId = id || `input-${Math.random().toString(36).slice(2, 9)}`;
+    const autoId = React.useId();
+    const inputId = id || `input-${autoId}`;
+    const describedById = error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined;
 
     return (
       <div className="w-full">
@@ -40,7 +42,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
 
         <div className="relative">
           {leftIcon && (
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-muted)]">
+            <div aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-muted)]">
               {leftIcon}
             </div>
           )}
@@ -48,11 +50,13 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={inputId}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedById}
             className={clsx(
               'w-full px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)]',
               'bg-[var(--bg-secondary)] border border-[var(--border-default)] text-[var(--ink-primary)]',
               'placeholder:text-[var(--ink-muted)]',
-              'focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-2 focus:ring-[var(--accent-cyan)]/20 focus:shadow-[var(--shadow-glow-cyan)]',
+              'focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-2 focus:ring-[var(--accent-cyan)]/20',
               error && 'border-[var(--danger)] focus:border-[var(--danger)] focus:ring-[var(--danger)]/20',
               leftIcon && 'pl-10',
               rightIcon && 'pr-10',
@@ -63,15 +67,15 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           />
 
           {rightIcon && (
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--ink-muted)]">
+            <div aria-hidden="true" className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--ink-muted)]">
               {rightIcon}
             </div>
           )}
         </div>
 
         {error && (
-          <p className="mt-2 text-sm text-[var(--danger)] flex items-center gap-1">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <p id={`${inputId}-error`} role="alert" className="mt-2 text-sm text-[var(--danger)] flex items-center gap-1">
+            <svg aria-hidden="true" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             {error}
@@ -79,7 +83,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         )}
 
         {hint && !error && (
-          <p className="mt-2 text-sm text-[var(--ink-muted)]">
+          <p id={`${inputId}-hint`} className="mt-2 text-sm text-[var(--ink-muted)]">
             {hint}
           </p>
         )}
@@ -111,7 +115,9 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     },
     ref
   ) => {
-    const textareaId = id || `textarea-${Math.random().toString(36).slice(2, 9)}`;
+    const autoId = React.useId();
+    const textareaId = id || `textarea-${autoId}`;
+    const describedById = error ? `${textareaId}-error` : hint ? `${textareaId}-hint` : undefined;
 
     return (
       <div className="w-full">
@@ -127,11 +133,13 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         <textarea
           ref={ref}
           id={textareaId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedById}
           className={clsx(
             'w-full px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)] resize-y min-h-[100px]',
             'bg-[var(--bg-secondary)] border border-[var(--border-default)] text-[var(--ink-primary)]',
             'placeholder:text-[var(--ink-muted)]',
-            'focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-2 focus:ring-[var(--accent-cyan)]/20 focus:shadow-[var(--shadow-glow-cyan)]',
+            'focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-2 focus:ring-[var(--accent-cyan)]/20',
             error && 'border-[var(--danger)] focus:border-[var(--danger)] focus:ring-[var(--danger)]/20',
             variant === 'glass' && 'bg-[var(--bg-glass)] backdrop-blur-sm',
             className
@@ -140,11 +148,11 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         />
 
         {error && (
-          <p className="mt-2 text-sm text-[var(--danger)]">{error}</p>
+          <p id={`${textareaId}-error`} role="alert" className="mt-2 text-sm text-[var(--danger)]">{error}</p>
         )}
 
         {hint && !error && (
-          <p className="mt-2 text-sm text-[var(--ink-muted)]">{hint}</p>
+          <p id={`${textareaId}-hint`} className="mt-2 text-sm text-[var(--ink-muted)]">{hint}</p>
         )}
       </div>
     );
@@ -174,7 +182,9 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     },
     ref
   ) => {
-    const selectId = id || `select-${Math.random().toString(36).slice(2, 9)}`;
+    const autoId = React.useId();
+    const selectId = id || `select-${autoId}`;
+    const describedById = error ? `${selectId}-error` : hint ? `${selectId}-hint` : undefined;
 
     return (
       <div className="w-full">
@@ -190,6 +200,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
         <select
           ref={ref}
           id={selectId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedById}
           className={clsx(
             'w-full px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)] cursor-pointer',
             'bg-[var(--bg-secondary)] border border-[var(--border-default)] text-[var(--ink-primary)]',
@@ -206,8 +218,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
           ))}
         </select>
 
-        {error && <p className="mt-2 text-sm text-[var(--danger)]">{error}</p>}
-        {hint && !error && <p className="mt-2 text-sm text-[var(--ink-muted)]">{hint}</p>}
+        {error && <p id={`${selectId}-error`} role="alert" className="mt-2 text-sm text-[var(--danger)]">{error}</p>}
+        {hint && !error && <p id={`${selectId}-hint`} className="mt-2 text-sm text-[var(--ink-muted)]">{hint}</p>}
       </div>
     );
   }

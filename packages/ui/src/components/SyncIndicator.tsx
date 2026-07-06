@@ -70,6 +70,7 @@ export const SyncIndicator: React.FC<SyncIndicatorProps> = ({
   if (compact) {
     return (
       <div
+        role="status"
         className={clsx(
           'inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium',
           'border transition-all duration-[var(--transition-base)]'
@@ -77,7 +78,7 @@ export const SyncIndicator: React.FC<SyncIndicatorProps> = ({
         style={{
           color: config.color,
           borderColor: config.color,
-          backgroundColor: `${config.color}15`,
+          backgroundColor: `color-mix(in srgb, ${config.color} 10%, transparent)`,
         }}
       >
         {state === 'syncing' ? (
@@ -95,16 +96,17 @@ export const SyncIndicator: React.FC<SyncIndicatorProps> = ({
 
   return (
     <div
+      role="status"
       className={clsx(
         'flex items-center gap-3 px-4 py-3 rounded-[var(--radius-lg)]',
         'border backdrop-blur-sm transition-all duration-[var(--transition-base)]'
       )}
       style={{
-        borderColor: `${config.color}40`,
-        backgroundColor: `${config.color}10`,
+        borderColor: `color-mix(in srgb, ${config.color} 25%, transparent)`,
+        backgroundColor: `color-mix(in srgb, ${config.color} 6%, transparent)`,
       }}
     >
-      <div className="flex items-center justify-center w-8 h-8 rounded-full" style={{ backgroundColor: `${config.color}20` }}>
+      <div className="flex items-center justify-center w-8 h-8 rounded-full" style={{ backgroundColor: `color-mix(in srgb, ${config.color} 12%, transparent)` }}>
         {state === 'syncing' ? (
           <Spinner size="sm" variant="cyan" />
         ) : (
@@ -135,6 +137,7 @@ export const SyncIndicator: React.FC<SyncIndicatorProps> = ({
 
       {state === 'error' && onRetry && (
         <button
+          type="button"
           onClick={onRetry}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-md)] bg-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger)]/30 transition-all"
         >
@@ -166,7 +169,14 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
         <span className="text-[var(--accent-cyan)]">{Math.round(progress)}%</span>
       </div>
 
-      <div className="h-2 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
+      <div
+        role="progressbar"
+        aria-valuenow={Math.round(progress)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Sync progress"
+        className="h-2 bg-[var(--bg-secondary)] rounded-full overflow-hidden"
+      >
         <div
           className="h-full bg-gradient-to-r from-[var(--accent-cyan)] to-[var(--accent-teal)] transition-all duration-300"
           style={{ width: `${progress}%` }}
@@ -176,7 +186,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
       {currentItem && (
         <p className="text-xs text-[var(--ink-muted)] truncate">
           {currentItem}
-          {total && current && ` (${current}/${total})`}
+          {total != null && current != null ? ` (${current}/${total})` : ''}
         </p>
       )}
     </div>

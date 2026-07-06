@@ -54,7 +54,7 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
       <div
         ref={ref}
         className={clsx(
-          'relative overflow-hidden transition-all duration-[var(--transition-base)]',
+          'nl-card relative overflow-hidden transition-all duration-[var(--transition-base)]',
           variantClasses[variant],
           paddingClasses[padding],
           radiusClasses[radius],
@@ -64,8 +64,8 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
         )}
         {...props}
       >
-        {/* Top gradient line */}
-        <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[var(--accent-cyan)] via-[var(--accent-teal)] to-[var(--accent-purple)] opacity-0 group-hover:opacity-100 transition-opacity" />
+        {/* Top gradient accent, revealed on hover (see .nl-card rules in styles.css) */}
+        <div aria-hidden="true" className="nl-card-accent absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[var(--accent-cyan)] via-[var(--accent-teal)] to-[var(--accent-purple)] opacity-0 transition-opacity" />
 
         {header && (
           <div className="mb-4 pb-4 border-b border-[var(--border-default)]">
@@ -87,13 +87,16 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
 
 Card.displayName = 'Card';
 
-// Card Header subcomponent
-export const CardHeader: React.FC<{ children: React.ReactNode; className?: string }> = ({
-  children,
-  className,
-}) => (
-  <div className={clsx('flex items-center justify-between mb-4', className)}>
-    {children}
+// Card Header subcomponent — stacks title/description vertically; pass
+// `actions` for a right-aligned control slot.
+export const CardHeader: React.FC<{
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+  className?: string;
+}> = ({ children, actions, className }) => (
+  <div className={clsx('flex items-start justify-between gap-3 mb-4', className)}>
+    <div className="flex flex-col gap-1 min-w-0">{children}</div>
+    {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
   </div>
 );
 

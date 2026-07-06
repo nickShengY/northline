@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   clearRuntimeToken,
   consumeRuntimeTokenFromUrl,
@@ -35,37 +35,47 @@ export interface AuthProviderConfig {
 type SessionState =
   | { status: "checking" }
   | { status: "ready"; session: NorthlineSession }
+  | { status: "offline"; message: string }
   | { status: "signed_out"; message?: string };
 
 const shellStyle: React.CSSProperties = {
-  minHeight: "100vh",
+  minHeight: "100dvh",
   display: "grid",
   placeItems: "center",
   padding: "24px",
-  color: "var(--ink)",
+  color: "var(--ink-primary)",
   background:
-    "radial-gradient(circle at 16% 12%, rgba(56, 189, 248, 0.12), transparent 32rem), linear-gradient(180deg, var(--bg) 0%, #050b14 100%)"
+    "radial-gradient(circle at 16% 12%, rgba(56, 189, 248, 0.12), transparent 32rem), linear-gradient(180deg, var(--bg-primary) 0%, #050b14 100%)"
 };
 
 const panelStyle: React.CSSProperties = {
   width: "min(440px, 100%)",
-  border: "1px solid var(--line)",
-  borderRadius: "10px",
-  background: "var(--glass-bg)",
-  boxShadow: "var(--glass-shadow)",
+  border: "1px solid var(--border-default)",
+  borderRadius: "var(--radius-lg)",
+  background: "var(--bg-glass)",
+  boxShadow: "var(--shadow-lg)",
+  backdropFilter: "blur(12px)",
+  WebkitBackdropFilter: "blur(12px)",
   padding: "24px"
 };
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
   minHeight: "46px",
-  border: "1px solid var(--line)",
-  borderRadius: "8px",
-  background: "var(--bg-soft)",
-  color: "var(--ink)",
+  border: "1px solid var(--border-default)",
+  borderRadius: "var(--radius-md)",
+  background: "var(--bg-secondary)",
+  color: "var(--ink-primary)",
   padding: "10px 12px",
   font: "inherit"
 };
+
+function isNetworkError(error: unknown): boolean {
+  return (
+    (typeof navigator !== "undefined" && navigator.onLine === false) ||
+    error instanceof TypeError
+  );
+}
 
 function SessionForm({
   appName,
@@ -82,21 +92,23 @@ function SessionForm({
 }) {
   const [token, setToken] = useState(defaultToken ?? "");
   const [remember, setRemember] = useState(false);
+  const [showToken, setShowToken] = useState(false);
 
   return (
     <main style={shellStyle}>
       <form
         style={panelStyle}
+        className="animate-slide-in-up"
         onSubmit={(event) => {
           event.preventDefault();
           onSubmit(token.trim(), remember ? "local" : "session");
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-          <Icon name="ShieldCheck" size={32} />
+          <Icon name="ShieldCheck" size={32} color="var(--accent-cyan)" />
           <div>
             <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.2 }}>{appName}</h1>
-            <p style={{ margin: "4px 0 0", color: "var(--ink-soft)", fontSize: 14 }}>Northline secure session</p>
+            <p style={{ margin: "4px 0 0", color: "var(--ink-secondary)", fontSize: 14 }}>Northline secure session</p>
           </div>
         </div>
 
@@ -111,24 +123,48 @@ function SessionForm({
           </Button>
         ) : null}
 
-        <label htmlFor="northline-session-token" style={{ display: "block", color: "var(--ink-soft)", marginTop: 16, marginBottom: 8 }}>
+        <label htmlFor="northline-session-token" style={{ display: "block", color: "var(--ink-secondary)", marginTop: 16, marginBottom: 8 }}>
           Session token
         </label>
-        <input
-          id="northline-session-token"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          style={inputStyle}
-        />
+        <div style={{ position: "relative" }}>
+          <input
+            id="northline-session-token"
+            type={showToken ? "text" : "password"}
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            style={{ ...inputStyle, paddingRight: 44 }}
+          />
+          <button
+            type="button"
+            onClick={() => setShowToken((current) => !current)}
+            aria-label={showToken ? "Hide session token" : "Show session token"}
+            aria-pressed={showToken}
+            style={{
+              position: "absolute",
+              right: 6,
+              top: "50%",
+              transform: "translateY(-50%)",
+              padding: 8,
+              color: "var(--ink-muted)",
+              borderRadius: "var(--radius-sm)"
+            }}
+          >
+            <Icon name={showToken ? "EyeOff" : "Eye"} size={16} />
+          </button>
+        </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, color: "var(--ink-soft)" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, color: "var(--ink-secondary)" }}>
           <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
           Keep this session on this device
         </label>
 
-        {message ? <p style={{ color: "var(--danger)", margin: "14px 0 0" }}>{message}</p> : null}
+        {message ? (
+          <p role="alert" style={{ color: "var(--danger)", margin: "14px 0 0" }}>
+            {message}
+          </p>
+        ) : null}
 
         <Button type="submit" fullWidth style={{ marginTop: 18 }} disabled={!token.trim()}>
           Continue
@@ -142,15 +178,24 @@ export function SessionGate({ appName, defaultDevToken, getAuthConfig, getSessio
   const [state, setState] = useState<SessionState>({ status: "checking" });
   const [authConfig, setAuthConfig] = useState<AuthProviderConfig | null>(null);
 
-  async function verify() {
+  const verify = useCallback(async () => {
     try {
       const session = await getSession();
       setState({ status: "ready", session });
-    } catch {
+    } catch (error) {
+      if (isNetworkError(error)) {
+        // Keep the stored token: a connectivity blip on a vessel must not
+        // sign the crew out of an offline-first app.
+        setState({
+          status: "offline",
+          message: "Cannot reach the Northline API. Check connectivity and retry."
+        });
+        return;
+      }
       clearRuntimeToken();
-      setState({ status: "signed_out", message: "Session could not be verified." });
+      setState({ status: "signed_out", message: "Session could not be verified. Enter a valid session token." });
     }
-  }
+  }, [getSession]);
 
   useEffect(() => {
     const redirected = consumeRuntimeTokenFromUrl("session");
@@ -164,7 +209,7 @@ export function SessionGate({ appName, defaultDevToken, getAuthConfig, getSessio
     } else {
       setState({ status: "signed_out" });
     }
-  }, [defaultDevToken]);
+  }, [defaultDevToken, verify]);
 
   useEffect(() => {
     if (!getAuthConfig) return;
@@ -186,9 +231,44 @@ export function SessionGate({ appName, defaultDevToken, getAuthConfig, getSessio
   if (state.status === "checking") {
     return (
       <main style={shellStyle}>
-        <div style={{ ...panelStyle, display: "flex", alignItems: "center", gap: 12 }}>
+        <div role="status" style={{ ...panelStyle, display: "flex", alignItems: "center", gap: 12 }}>
           <Icon name="RefreshCw" size={24} spin />
           <span>Verifying session</span>
+        </div>
+      </main>
+    );
+  }
+
+  if (state.status === "offline") {
+    return (
+      <main style={shellStyle}>
+        <div role="alert" style={{ ...panelStyle, display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <Icon name="AlertTriangle" size={24} color="var(--warning)" />
+            <strong>Connection problem</strong>
+          </div>
+          <p style={{ margin: 0, color: "var(--ink-secondary)" }}>{state.message}</p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Button
+              type="button"
+              onClick={() => {
+                setState({ status: "checking" });
+                void verify();
+              }}
+            >
+              Retry
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                clearRuntimeToken();
+                setState({ status: "signed_out" });
+              }}
+            >
+              Use a different token
+            </Button>
+          </div>
         </div>
       </main>
     );

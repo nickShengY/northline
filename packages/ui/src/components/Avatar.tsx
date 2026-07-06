@@ -51,9 +51,9 @@ export const Avatar: React.FC<AvatarProps> = ({
   status,
   className,
 }) => {
-  const [imgError, setImgError] = React.useState(false);
+  const [erroredSrc, setErroredSrc] = React.useState<string | null>(null);
 
-  const showFallback = !src || imgError;
+  const showFallback = !src || erroredSrc === src;
 
   return (
     <div className={clsx('relative inline-flex', className)}>
@@ -69,7 +69,7 @@ export const Avatar: React.FC<AvatarProps> = ({
             src={src}
             alt={alt || name}
             className="w-full h-full object-cover"
-            onError={() => setImgError(true)}
+            onError={() => setErroredSrc(src)}
           />
         ) : name ? (
           <div
@@ -89,6 +89,8 @@ export const Avatar: React.FC<AvatarProps> = ({
 
       {status && (
         <span
+          role="img"
+          aria-label={`Status: ${status}`}
           className={clsx(
             'absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-[var(--bg-primary)]',
             statusColors[status]
