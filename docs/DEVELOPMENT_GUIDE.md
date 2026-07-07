@@ -49,15 +49,31 @@ northline/
 3. Run validation:
 
 ```bash
-pnpm typecheck
-pnpm build
-pnpm test
+pnpm release:check
 ```
 
 4. Update docs for behavior or architecture changes.
 5. Open PR with test notes.
 
 For production-like promotion, follow `docs/OPERATIONS_RUNBOOK.md` and attach the evidence packet described there.
+
+## Preview Smoke Checks
+
+The app preview scripts bind to fixed local ports and fail if the port is occupied:
+
+| App | Preview URL | Expected title |
+|---|---|---|
+| Web Portal | http://127.0.0.1:4173 | Northline Command Portal |
+| Mobile Ops | http://127.0.0.1:4174 | Northline Field Ops |
+| Tablet Ops | http://127.0.0.1:4175 | Northline Tablet Ops |
+
+Before treating screenshots or browser walkthroughs as evidence, run:
+
+```bash
+pnpm verify:app-identity
+```
+
+If a port is occupied and you intentionally preview an app elsewhere, pass an override such as `pnpm verify:app-identity -- --only=mobile --mobile-url=http://127.0.0.1:4274/`.
 
 ## Notes
 
@@ -72,4 +88,5 @@ For production-like promotion, follow `docs/OPERATIONS_RUNBOOK.md` and attach th
 - Configure an HTTPS `OBSERVABILITY_WEBHOOK_URL` and `OBSERVABILITY_WEBHOOK_TOKEN` outside development to export structured request, error, and authorization-denial events to an authenticated external collector. Errors and authorization denials are always emitted when configured; request events respect `OBSERVABILITY_SAMPLE_RATE`.
 - Sync uploads in staging/production require registered device signatures. Local development can use `dev:*` signatures to keep PWA workflows fast.
 - Sensitive operations such as device administration, ruleset changes, compliance signing, and export generation write audit records that admins can inspect through `/v1/audit/events`; outside development, audit write failures fail the operation closed.
-- To validate migrations against a live Postgres-compatible database, set `NORTHLINE_TEST_DATABASE_URL` and run `pnpm test:db`. The test creates and drops an isolated schema.
+- To validate migrations against a live Postgres-compatible database, set `NORTHLINE_TEST_DATABASE_URL` and run `pnpm test:db`. The test creates and drops an isolated schema. CI provides a disposable Postgres service for this check and blocks deploy jobs when it fails.
+- Public production builds do not emit source maps by default. Set `VITE_ENABLE_SOURCEMAPS=true` only for controlled diagnostic builds, and keep `pnpm verify:dist` green before publishing frontend artifacts.

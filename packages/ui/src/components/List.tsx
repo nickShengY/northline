@@ -196,7 +196,7 @@ export const Checklist: React.FC<ChecklistProps> = ({
               type="checkbox"
               checked={item.checked}
               onChange={() => onToggle(item.id)}
-              className="w-5 h-5 rounded accent-[var(--accent-cyan)]"
+              className="w-6 h-6 rounded accent-[var(--accent-cyan)]"
             />
             <span
               className={clsx(

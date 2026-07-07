@@ -146,7 +146,7 @@ export function RealTimeFleetOverlay({
               <button
                 onClick={reconnect}
                 className="secondary"
-                style={{ padding: "0.125rem 0.5rem", fontSize: "0.625rem" }}
+                style={{ minHeight: 44, padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}
               >
                 Reconnect
               </button>
@@ -167,7 +167,7 @@ export function RealTimeFleetOverlay({
               <button
                 onClick={() => setShowAIRecommendations((value) => !value)}
                 className={aiRecommendations.length > 0 ? "active" : "secondary"}
-                style={{ padding: "0.25rem 0.5rem", fontSize: "0.625rem" }}
+                style={{ minHeight: 44, padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}
                 aria-expanded={showAIRecommendations}
               >
                 Insights {aiRecommendations.length}
@@ -177,7 +177,7 @@ export function RealTimeFleetOverlay({
               <button
                 onClick={() => setShowRiskPanel((value) => !value)}
                 className="secondary"
-                style={{ padding: "0.25rem 0.5rem", fontSize: "0.625rem" }}
+                style={{ minHeight: 44, padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}
                 aria-expanded={showRiskPanel}
               >
                 Risks {highRiskCount}

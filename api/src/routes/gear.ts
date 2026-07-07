@@ -6,6 +6,7 @@ import { readJsonBody } from "../lib/request";
 import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { validateOptionalQueryParam } from "../lib/route-params";
+import { demoGear, shouldUseDevelopmentDataFallback } from "../lib/dev-fallback";
 
 const transitionSchema = z.object({
   trip_id: z.string().min(3),
@@ -151,35 +152,41 @@ gearRouter.get("/trip/:tripId", async (c) => {
     return c.json({ error: "invalid_query_param", param: "mode", message: "mode must be OFFSHORE or ICE" }, 400);
   }
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
-    if (mode === "OFFSHORE") {
+  let rows: any[];
+  try {
+    rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+      if (mode === "OFFSHORE") {
+        return sql`
+          select gear_id, trip_id, status, buoy_label, pot_count, line_length_m, target_depth_m, set_time::text, last_position, updated_at::text
+          from gear_state_offshore
+          where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
+          order by updated_at desc
+        `;
+      }
+
+      if (mode === "ICE") {
+        return sql`
+          select gear_id, trip_id, status, station_id, tipup_type, bait, depth_m, check_interval_min, last_position, updated_at::text
+          from gear_state_ice
+          where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
+          order by updated_at desc
+        `;
+      }
+
       return sql`
-        select gear_id, trip_id, status, buoy_label, pot_count, line_length_m, target_depth_m, set_time::text, last_position, updated_at::text
+        select gear_id, trip_id, status, 'OFFSHORE'::text as source, last_position, updated_at::text
         from gear_state_offshore
         where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
-        order by updated_at desc
-      `;
-    }
-
-    if (mode === "ICE") {
-      return sql`
-        select gear_id, trip_id, status, station_id, tipup_type, bait, depth_m, check_interval_min, last_position, updated_at::text
+        union all
+        select gear_id, trip_id, status, 'ICE'::text as source, last_position, updated_at::text
         from gear_state_ice
         where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
-        order by updated_at desc
       `;
-    }
-
-    return sql`
-      select gear_id, trip_id, status, 'OFFSHORE'::text as source, last_position, updated_at::text
-      from gear_state_offshore
-      where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
-      union all
-      select gear_id, trip_id, status, 'ICE'::text as source, last_position, updated_at::text
-      from gear_state_ice
-      where tenant_id = ${auth.tenantId} and trip_id = ${tripId}
-    `;
-  });
+    });
+  } catch (error) {
+    if (!shouldUseDevelopmentDataFallback(c.env, error)) throw error;
+    rows = demoGear.filter((gear) => gear.trip_id === tripId);
+  }
 
   return c.json({ trip_id: tripId, mode: mode ?? "ALL", gear: rows });
 });

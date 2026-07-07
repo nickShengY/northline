@@ -411,7 +411,7 @@ export function VesselOpsApp() {
         );
         toast.error(
           "Position unknown",
-          "The hazard report requires coordinates and none are available. The alert stays active — use radio procedures."
+          "The hazard report requires coordinates and none are available. The alert stays active; use radio procedures."
         );
         return;
       }
@@ -461,7 +461,7 @@ export function VesselOpsApp() {
     (status: VesselStatus) => {
       setVesselStatus(status);
       addActivity(`Vessel status set to ${status} on this tablet (local only).`, "info");
-      toast.info(`Status: ${status}`, "Local tablet status — not synced to shore.");
+      toast.info(`Status: ${status}`, "Local tablet status is not synced to shore.");
     },
     [addActivity, toast.info]
   );
@@ -712,6 +712,7 @@ export function VesselOpsApp() {
                       type="checkbox"
                       checked={watchChecklist[id as keyof typeof watchChecklist]}
                       onChange={(event) => setWatchChecklist((current) => ({ ...current, [id]: event.target.checked }))}
+                      className="w-6 h-6"
                     />
                   </label>
                 ))}
@@ -835,7 +836,7 @@ export function VesselOpsApp() {
             <CardHeader>
               <CardTitle>Risk Assessment</CardTitle>
               <CardDescription>
-                Estimate only — preset workload and weather assumptions plus the live open-incident count.
+                Estimate only: preset workload and weather assumptions plus the live open-incident count.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -845,7 +846,7 @@ export function VesselOpsApp() {
                 ) : riskScore ? (
                   <>
                     <RiskBadge tier={riskScore.tier} score={riskScore.score} size="lg" />
-                    <p className="text-xs text-[var(--ink-muted)]">Estimated risk — not a live sensor reading.</p>
+                    <p className="text-xs text-[var(--ink-muted)]">Estimated risk, not a live sensor reading.</p>
                   </>
                 ) : (
                   <p className="text-sm text-[var(--ink-muted)]">

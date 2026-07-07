@@ -1,4 +1,4 @@
-name = "northline-api"
+name = "northline-api-dev"
 main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]

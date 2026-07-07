@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --port 5174",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
-    "preview": "vite preview --port 4174",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview --host 127.0.0.1 --port 4174 --strictPort",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -19,12 +20,13 @@
   "devDependencies": {
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.0.3",
     "fake-indexeddb": "^6.2.5",
     "typescript": "^5.7.3",
-    "vite": "^6.0.7",
-    "vite-plugin-pwa": "^1.2.0",
-    "vitest": "^2.1.8",
-    "workbox-window": "^7.4.0"
+    "vite": "^8.1.3",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^4.1.9",
+    "workbox-build": "7.4.1",
+    "workbox-window": "^7.4.1"
   }
 }

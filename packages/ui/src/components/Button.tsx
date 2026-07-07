@@ -13,10 +13,10 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const sizeClasses: Record<Size, string> = {
-  sm: 'px-3 py-1.5 text-sm',
-  md: 'px-4 py-2.5 text-base',
-  lg: 'px-6 py-3 text-lg',
-  xl: 'px-8 py-4 text-xl',
+  sm: 'min-h-[44px] px-3 py-2 text-sm',
+  md: 'min-h-[44px] px-4 py-2.5 text-base',
+  lg: 'min-h-[48px] px-6 py-3 text-lg',
+  xl: 'min-h-[56px] px-8 py-4 text-xl',
 };
 
 const variantClasses: Record<string, string> = {

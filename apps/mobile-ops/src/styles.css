@@ -474,7 +474,25 @@ select {
 }
 
 .bottom-navigation {
+  background: var(--bg-elevated);
   box-shadow: 0 -16px 32px rgba(2, 8, 23, 0.28);
+}
+
+@media (min-width: 640px) {
+  .field-shell {
+    padding-bottom: var(--space-8);
+  }
+
+  .bottom-navigation {
+    position: static !important;
+    box-shadow: var(--shadow-md);
+  }
+
+  .bottom-navigation > div {
+    max-width: none;
+    justify-content: center;
+    gap: var(--space-4);
+  }
 }
 
 .public-key-row {

@@ -13,7 +13,7 @@ The Northline API is a Cloudflare Workers-based serverless API that provides end
 
 ### Development Mode
 ```http
-Authorization: Bearer demoTenant:portal_admin:OWNER
+Authorization: Bearer <local-dev-token>
 ```
 
 ### Production Mode
@@ -435,7 +435,7 @@ import { NorthlineAPI } from '@northline/client';
 
 const api = new NorthlineAPI({
   baseURL: 'http://127.0.0.1:8787',
-  token: 'demoTenant:portal_admin:OWNER'
+  token: '<local-dev-token>'
 });
 
 // Get dashboard
@@ -454,7 +454,7 @@ from northline_client import NorthlineAPI
 
 api = NorthlineAPI(
     base_url='http://127.0.0.1:8787',
-    token='demoTenant:portal_admin:OWNER'
+    token='<local-dev-token>'
 )
 
 # Get dashboard
@@ -473,7 +473,7 @@ cd api
 pnpm dev
 
 # Test endpoints
-curl -H "Authorization: Bearer demoTenant:portal_admin:OWNER" \
+curl -H "Authorization: Bearer <local-dev-token>" \
   http://localhost:8787/v1/ops/dashboard
 ```
 
@@ -484,7 +484,7 @@ import { test, expect } from 'vitest';
 
 test('GET /v1/ops/dashboard', async () => {
   const response = await fetch('/v1/ops/dashboard', {
-    headers: { 'Authorization': 'Bearer demoTenant:portal_admin:OWNER' }
+    headers: { 'Authorization': 'Bearer <local-dev-token>' }
   });
 
   expect(response.status).toBe(200);

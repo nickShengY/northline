@@ -91,6 +91,7 @@ export function bearerTokenFromHeader(header?: string | null): string | null {
 }
 
 export function websocketTokenFromRequest(input: {
+  appEnv: Env["APP_ENV"];
   url: string;
   authorization?: string | null;
   protocol?: string | null;
@@ -98,20 +99,26 @@ export function websocketTokenFromRequest(input: {
   const headerToken = bearerTokenFromHeader(input.authorization);
   if (headerToken) return headerToken;
 
-  const urlToken = new URL(input.url).searchParams.get("token")?.trim();
-  if (urlToken) return urlToken;
-
-  return input.protocol
+  const protocolToken = input.protocol
     ?.split(",")
     .map((item) => item.trim())
     .find((item) => item.startsWith("northline-token."))
     ?.replace("northline-token.", "") ?? null;
+  if (protocolToken) return protocolToken;
+
+  if (input.appEnv === "development") {
+    const urlToken = new URL(input.url).searchParams.get("token")?.trim();
+    if (urlToken) return urlToken;
+  }
+
+  return null;
 }
 
 export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: { auth: AuthContext } }>(
   async (c, next) => {
     const token = c.req.header("Upgrade") === "websocket"
       ? websocketTokenFromRequest({
+          appEnv: c.env.APP_ENV,
           url: c.req.url,
           authorization: c.req.header("Authorization"),
           protocol: c.req.header("sec-websocket-protocol")

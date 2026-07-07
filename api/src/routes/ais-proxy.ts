@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { withTenant } from "../lib/db";
+import { demoTrips, shouldUseDevelopmentDataFallback } from "../lib/dev-fallback";
 import type { AuthContext, Env } from "../types";
 
 type AisAppContext = { Bindings: Env; Variables: { auth: AuthContext } };
@@ -12,6 +13,7 @@ const AIS_AI_MAX_BODY_BYTES = 64 * 1024;
 const AIS_AI_MAX_VESSELS = 25;
 const AIS_AI_MAX_OBSERVATIONS = 500;
 const AIS_AI_DEFAULT_TIMEOUT_MS = 12_000;
+const AIS_PROXY_TIMEOUT_MS = 8_000;
 
 function requireAisProxyUrl(env: Env) {
   if (!env.AIS_PROXY_URL) {
@@ -66,17 +68,24 @@ async function proxyAisJson(c: Context<AisAppContext>, path: string) {
     const incomingUrl = new URL(c.req.url);
     const upstream = new URL(path.replace(/^\//, ""), base);
     upstream.search = incomingUrl.search;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AIS_PROXY_TIMEOUT_MS);
 
-    const response = await fetch(upstream.toString(), {
-      method: "GET",
-      headers: { "Content-Type": "application/json" }
-    });
+    try {
+      const response = await fetch(upstream.toString(), {
+        method: "GET",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" }
+      });
 
-    const text = await response.text();
-    return new Response(text, {
-      status: response.status,
-      headers: { "Content-Type": response.headers.get("Content-Type") ?? "application/json" }
-    });
+      const text = await response.text();
+      return new Response(text, {
+        status: response.status,
+        headers: { "Content-Type": response.headers.get("Content-Type") ?? "application/json" }
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch (error) {
     return c.json(
       {
@@ -104,33 +113,47 @@ interface FallbackAisVessel {
 }
 
 async function loadFallbackVessels(env: Env, tenantId: string): Promise<FallbackAisVessel[]> {
-  const rows = await withTenant(env, tenantId, async (sql) => {
-    return sql`
-      with gear_positions as (
-        select trip_id,
-               avg((last_position->>'lat')::float) as latitude,
-               avg((last_position->>'lon')::float) as longitude
-        from (
-          select trip_id, last_position
-          from gear_state_offshore
-          where tenant_id = ${tenantId}
-            and last_position is not null
-          union all
-          select trip_id, last_position
-          from gear_state_ice
-          where tenant_id = ${tenantId}
-            and last_position is not null
-        ) positions
-        group by trip_id
-      )
-      select t.trip_id, t.mode, t.status, t.location_name, t.updated_at::text, p.latitude, p.longitude
-      from trip_state t
-      left join gear_positions p on p.trip_id = t.trip_id
-      where t.tenant_id = ${tenantId}
-      order by t.updated_at desc
-      limit 100
-    `;
-  });
+  let rows: any[];
+  try {
+    rows = await withTenant(env, tenantId, async (sql) => {
+      return sql`
+        with gear_positions as (
+          select trip_id,
+                 avg((last_position->>'lat')::float) as latitude,
+                 avg((last_position->>'lon')::float) as longitude
+          from (
+            select trip_id, last_position
+            from gear_state_offshore
+            where tenant_id = ${tenantId}
+              and last_position is not null
+            union all
+            select trip_id, last_position
+            from gear_state_ice
+            where tenant_id = ${tenantId}
+              and last_position is not null
+          ) positions
+          group by trip_id
+        )
+        select t.trip_id, t.mode, t.status, t.location_name, t.updated_at::text, p.latitude, p.longitude
+        from trip_state t
+        left join gear_positions p on p.trip_id = t.trip_id
+        where t.tenant_id = ${tenantId}
+        order by t.updated_at desc
+        limit 100
+      `;
+    });
+  } catch (error) {
+    if (!shouldUseDevelopmentDataFallback(env, error)) throw error;
+    rows = demoTrips.map((trip) => ({
+      trip_id: trip.trip_id,
+      mode: trip.mode,
+      status: trip.status,
+      location_name: trip.location_name,
+      updated_at: trip.updated_at,
+      latitude: trip.mode === "ICE" ? 44.42 : 55.5,
+      longitude: trip.mode === "ICE" ? -79.33 : -165.2
+    }));
+  }
 
   return rows.map((row) => {
     const latitude = Number(row.latitude ?? (row.mode === "ICE" ? 44.42 : 55.5));

@@ -30,6 +30,8 @@ export type TelemetryEvent =
       env: Env["APP_ENV"];
     };
 
+const TELEMETRY_TIMEOUT_MS = 3000;
+
 function sampleRate(env: Env) {
   const parsed = Number(env.OBSERVABILITY_SAMPLE_RATE ?? "0.05");
   if (!Number.isFinite(parsed)) return 0.05;
@@ -53,21 +55,28 @@ export async function emitTelemetry(env: Env, event: TelemetryEvent) {
   }
 
   try {
-    const response = await fetch(env.OBSERVABILITY_WEBHOOK_URL as string, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        source: "northline-api",
-        ...event
-      })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TELEMETRY_TIMEOUT_MS);
+    try {
+      const response = await fetch(env.OBSERVABILITY_WEBHOOK_URL as string, {
+        method: "POST",
+        signal: controller.signal,
+        headers,
+        body: JSON.stringify({
+          source: "northline-api",
+          ...event
+        })
+      });
 
-    if (!response.ok) {
-      console.warn(JSON.stringify({
-        event: "telemetry_delivery_failed",
-        status: response.status,
-        request_id: event.request_id
-      }));
+      if (!response.ok) {
+        console.warn(JSON.stringify({
+          event: "telemetry_delivery_failed",
+          status: response.status,
+          request_id: event.request_id
+        }));
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   } catch (error) {
     console.warn(JSON.stringify({ event: "telemetry_delivery_failed", error: String(error), request_id: event.request_id }));

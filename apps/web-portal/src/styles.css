@@ -414,6 +414,7 @@ button[class*="danger"] {
 /* Inputs */
 input {
   width: 100%;
+  min-height: 48px;
   padding: var(--space-3) var(--space-4);
   font-family: var(--font-body);
   font-size: 0.9375rem;

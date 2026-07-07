@@ -1,7 +1,17 @@
 const base = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
+function getAuthToken() {
+  const token = import.meta.env.VITE_DEV_TOKEN;
+  if (!token) {
+    throw new Error("Missing VITE_DEV_TOKEN for legacy mobile ice API requests.");
+  }
+  return token;
+}
+
 const authHeader = {
-  Authorization: `Bearer ${import.meta.env.VITE_DEV_TOKEN ?? "demoTenant:guide_01:GUIDE"}`,
+  get Authorization() {
+    return `Bearer ${getAuthToken()}`;
+  },
   "Content-Type": "application/json"
 };
 

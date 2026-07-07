@@ -9,6 +9,7 @@ import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
 import { fitsJsonByteLimit } from "../lib/json-size";
 import { validateOptionalQueryParam, validateRouteParam } from "../lib/route-params";
+import { demoHazards, demoIncidents, shouldUseDevelopmentDataFallback } from "../lib/dev-fallback";
 
 const pointSchema = z.object({ lat: z.number().gte(-90).lte(90), lon: z.number().gte(-180).lte(180) });
 
@@ -156,15 +157,21 @@ safetyRouter.get("/incident/:caseId", async (c) => {
 safetyRouter.get("/incidents/open", async (c) => {
   const auth = c.get("auth");
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
-    return sql`
-      select case_id, trip_id, category, severity, status, summary, opened_by, opened_at::text
-      from safety_case
-      where tenant_id = ${auth.tenantId} and status = 'OPEN'
-      order by opened_at desc
-      limit 200
-    `;
-  });
+  let rows: any[];
+  try {
+    rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+      return sql`
+        select case_id, trip_id, category, severity, status, summary, opened_by, opened_at::text
+        from safety_case
+        where tenant_id = ${auth.tenantId} and status = 'OPEN'
+        order by opened_at desc
+        limit 200
+      `;
+    });
+  } catch (error) {
+    if (!shouldUseDevelopmentDataFallback(c.env, error)) throw error;
+    rows = [...demoIncidents];
+  }
 
   return c.json({ incidents: rows.map((row) => ({ ...row })) });
 });
@@ -251,23 +258,29 @@ safetyRouter.get("/hazards", async (c) => {
     }, 400);
   }
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
-    return scope
-      ? sql`
-          select hazard_id, type, severity, confidence::float, location, sharing_scope, confirmed_count, ts_last_update::text
-          from hazard_layer_state
-          where tenant_id = ${auth.tenantId} and sharing_scope = ${scope}
-          order by ts_last_update desc
-          limit 300
-        `
-      : sql`
-          select hazard_id, type, severity, confidence::float, location, sharing_scope, confirmed_count, ts_last_update::text
-          from hazard_layer_state
-          where tenant_id = ${auth.tenantId}
-          order by ts_last_update desc
-          limit 300
-        `;
-  });
+  let rows: any[];
+  try {
+    rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+      return scope
+        ? sql`
+            select hazard_id, type, severity, confidence::float, location, sharing_scope, confirmed_count, ts_last_update::text
+            from hazard_layer_state
+            where tenant_id = ${auth.tenantId} and sharing_scope = ${scope}
+            order by ts_last_update desc
+            limit 300
+          `
+        : sql`
+            select hazard_id, type, severity, confidence::float, location, sharing_scope, confirmed_count, ts_last_update::text
+            from hazard_layer_state
+            where tenant_id = ${auth.tenantId}
+            order by ts_last_update desc
+            limit 300
+          `;
+    });
+  } catch (error) {
+    if (!shouldUseDevelopmentDataFallback(c.env, error)) throw error;
+    rows = demoHazards.filter((hazard) => scope === undefined || hazard.sharing_scope === scope);
+  }
 
   return c.json({ hazards: rows });
 });

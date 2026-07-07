@@ -441,7 +441,7 @@ interface OpsEvent {
 
 #### Development Mode
 ```typescript
-Authorization: Bearer demoTenant:portal_admin:OWNER
+Authorization: Bearer <local-dev-token>
 ```
 
 #### Production Mode
@@ -563,7 +563,7 @@ pnpm test --filter @northline/api
 ```bash
 # API Configuration
 VITE_API_BASE_URL=http://127.0.0.1:8787
-VITE_DEV_TOKEN=demoTenant:portal_admin:OWNER
+VITE_DEV_TOKEN=<local-dev-token>
 
 # Database
 NEON_DATABASE_URL=postgresql://...
@@ -759,7 +759,7 @@ GET /v1/sync/health
 curl http://localhost:8787/health
 
 # View sync status
-curl -H "Authorization: Bearer demoTenant:portal_admin:OWNER" \
+curl -H "Authorization: Bearer <local-dev-token>" \
   http://localhost:8787/v1/sync/health
 ```
 

@@ -10,6 +10,7 @@ import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
 import { parseBoundedIntegerQueryParam, validateOptionalQueryParam, validateRouteParam } from "../lib/route-params";
+import { demoDevices, demoSyncMetrics, shouldUseDevelopmentDataFallback } from "../lib/dev-fallback";
 
 type SyncContext = Context<{ Bindings: Env; Variables: { auth: AuthContext } }>;
 
@@ -367,21 +368,27 @@ syncRouter.get("/metrics/summary", async (c) => {
   if (!hoursResult.ok) return c.json(hoursResult.error, 400);
   const hours = hoursResult.value;
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
-    return sql`
-      select metric_name,
-             avg(metric_value)::float as avg_value,
-             max(metric_value)::float as max_value,
-             min(metric_value)::float as min_value,
-             count(*)::int as samples,
-             max(measured_at)::text as latest_at
-      from sync_health_metric
-      where tenant_id = ${auth.tenantId}
-        and measured_at >= now() - make_interval(hours => ${hours})
-      group by metric_name
-      order by metric_name asc
-    `;
-  });
+  let rows: any[];
+  try {
+    rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+      return sql`
+        select metric_name,
+               avg(metric_value)::float as avg_value,
+               max(metric_value)::float as max_value,
+               min(metric_value)::float as min_value,
+               count(*)::int as samples,
+               max(measured_at)::text as latest_at
+        from sync_health_metric
+        where tenant_id = ${auth.tenantId}
+          and measured_at >= now() - make_interval(hours => ${hours})
+        group by metric_name
+        order by metric_name asc
+      `;
+    });
+  } catch (error) {
+    if (!shouldUseDevelopmentDataFallback(c.env, error)) throw error;
+    rows = [...demoSyncMetrics];
+  }
 
   return c.json({
     tenant_id: auth.tenantId,
@@ -565,15 +572,21 @@ syncRouter.post("/device/revoke/:deviceId", requireRole("ORG_ADMIN", "OWNER", "C
 syncRouter.get("/devices", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {
   const auth = c.get("auth");
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
-    return sql`
-      select device_id, subject_type, subject_id, key_version, revoked, last_seen_at::text, created_at::text
-      from sync_device
-      where tenant_id = ${auth.tenantId}
-      order by created_at desc
-      limit 500
-    `;
-  });
+  let rows: any[];
+  try {
+    rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+      return sql`
+        select device_id, subject_type, subject_id, key_version, revoked, last_seen_at::text, created_at::text
+        from sync_device
+        where tenant_id = ${auth.tenantId}
+        order by created_at desc
+        limit 500
+      `;
+    });
+  } catch (error) {
+    if (!shouldUseDevelopmentDataFallback(c.env, error)) throw error;
+    rows = [...demoDevices];
+  }
 
   return c.json({ devices: rows });
 });

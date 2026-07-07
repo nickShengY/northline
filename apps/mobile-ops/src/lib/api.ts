@@ -8,6 +8,14 @@ import {
 const base = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
 export const defaultDevToken = "demoTenant:crew_1:CREW";
+const REQUEST_TIMEOUT_MS = 15000;
+
+function requestTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  }
+  return undefined;
+}
 
 function pathSegment(value: string) {
   return encodeURIComponent(value);
@@ -85,13 +93,16 @@ async function parseJson<T>(response: Response, label: string): Promise<T> {
 
 export async function getSession() {
   const res = await fetch(`${base}/v1/auth/session`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<SessionResponse>(res, "Session");
 }
 
 export async function getAuthConfig() {
-  const res = await fetch(`${base}/v1/auth/config`);
+  const res = await fetch(`${base}/v1/auth/config`, {
+    signal: requestTimeoutSignal()
+  });
   return parseJson<{
     enabled: boolean;
     login_url: string | null;
@@ -111,6 +122,7 @@ export async function scoreRisk(mode: Mode, input: {
   const res = await fetch(`${base}/v1/safety/risk/score`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ mode, ...input })
   });
   return parseJson<RiskScoreResult>(res, "Risk score");
@@ -118,7 +130,8 @@ export async function scoreRisk(mode: Mode, input: {
 
 export async function listTrips() {
   const res = await fetch(`${base}/v1/ops/trips`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{ trips: TripRow[] }>(res, "Trip list");
 }
@@ -132,6 +145,7 @@ export async function recommendTraining(mode: Mode, input: {
   const res = await fetch(`${base}/v1/training/recommend`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ mode, ...input })
   });
   return parseJson<{ recommended: TrainingRecommendation[] }>(res, "Training recommendation");
@@ -141,6 +155,7 @@ export async function scheduleCheckin(input: { checkin_id: string; trip_id: stri
   const res = await fetch(`${base}/v1/safety/checkin/schedule`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   return parseJson(res, "Check-in schedule");
@@ -150,6 +165,7 @@ export async function completeCheckin(input: { checkin_id: string; trip_id: stri
   const res = await fetch(`${base}/v1/safety/checkin/complete`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   return parseJson(res, "Check-in complete");
@@ -167,6 +183,7 @@ export async function reportHazard(input: {
   const res = await fetch(`${base}/v1/safety/hazard/report`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   return parseJson(res, "Hazard report");
@@ -175,14 +192,16 @@ export async function reportHazard(input: {
 export async function listHazards(scope?: "PRIVATE" | "GROUP" | "ORG" | "DELAYED_PUBLIC" | "PUBLIC") {
   const query = scope ? `?scope=${scope}` : "";
   const res = await fetch(`${base}/v1/safety/hazards${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{ hazards: HazardRow[] }>(res, "Hazard list");
 }
 
 export async function getTripGear(tripId: string, mode: Mode = "OFFSHORE") {
   const res = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}?mode=${mode}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<{ gear: GearRow[] }>(res, "Gear list");
 }
@@ -197,6 +216,7 @@ export async function transitionGear(input: {
   const res = await fetch(`${base}/v1/gear/transition`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ mode: "OFFSHORE", ...input })
   });
   return parseJson(res, "Gear transition");
@@ -206,6 +226,7 @@ export async function registerCurrentDevice(input: { device_id: string; public_k
   const res = await fetch(`${base}/v1/sync/device/register-self`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({
       key_version: 1,
       ...input
@@ -218,6 +239,7 @@ export async function uploadEvents(events: unknown[], cursor?: string | null) {
   const res = await fetch(`${base}/v1/sync/upload`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ events, ...(cursor ? { cursor } : {}) })
   });
   return parseJson<UploadEventsResponse>(res, "Event upload");
@@ -229,7 +251,8 @@ export async function downloadEvents(cursor?: string | null, limit = 1000) {
   params.set("limit", String(limit));
 
   const res = await fetch(`${base}/v1/sync/download?${params.toString()}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   return parseJson<DownloadEventsResponse>(res, "Event download");
 }
@@ -238,6 +261,7 @@ export async function ackSyncCursor(cursor: string) {
   const res = await fetch(`${base}/v1/sync/ack`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ cursor })
   });
   return parseJson<AckSyncResponse>(res, "Sync ack");

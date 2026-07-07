@@ -6,6 +6,14 @@
  */
 
 const OPEN_METEO_BASE = "https://marine-api.open-meteo.com/v1";
+const MARINE_WEATHER_TIMEOUT_MS = 10000;
+
+function requestTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(MARINE_WEATHER_TIMEOUT_MS);
+  }
+  return undefined;
+}
 
 export interface MarineWeatherData {
   time: string[];
@@ -38,7 +46,9 @@ export async function getMarineWeather(
     temperature_unit: "celsius"
   });
 
-  const response = await fetch(`${OPEN_METEO_BASE}/marine?${params}`);
+  const response = await fetch(`${OPEN_METEO_BASE}/marine?${params}`, {
+    signal: requestTimeoutSignal()
+  });
 
   if (!response.ok) {
     throw new Error(`Marine weather API error: ${response.status}`);

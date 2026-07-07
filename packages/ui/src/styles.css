@@ -601,6 +601,7 @@ button[class*="from-[var(--danger)]"].bg-gradient-to-r {
 .max-w-sm { max-width: 24rem; }
 .max-w-\[calc\(100vw-2rem\)\] { max-width: calc(100vw - 2rem); }
 .min-h-\[44px\] { min-height: 44px; }
+.min-h-\[48px\] { min-height: 48px; }
 .max-w-md { max-width: 28rem; }
 .max-w-xl { max-width: 36rem; }
 .p-1 { padding: 0.25rem; }

@@ -4,6 +4,14 @@ import type { VesselPosition } from "../components/charts";
 import { boundingBoxToRegion, projectToMap } from "../lib/geo";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
+const REQUEST_TIMEOUT_MS = 15000;
+
+function requestTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  }
+  return undefined;
+}
 
 function getAuthHeaders() {
   const token = import.meta.env.DEV
@@ -116,7 +124,8 @@ export function useAISBackend(
         setConnectionStatus("connecting");
       }
       const response = await fetch(`${API_BASE}/v1/ais/vessels`, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        signal: requestTimeoutSignal()
       });
 
       if (!response.ok) {
@@ -213,6 +222,7 @@ export function useAISBackend(
       const response = await fetch(`${API_BASE}/v1/ais/risk/assess`, {
         method: "POST",
         headers: getAuthHeaders(),
+        signal: requestTimeoutSignal(),
         body: JSON.stringify({
           vessels: vesselsRef.current,
           weather,
@@ -261,6 +271,7 @@ export function useAISBackend(
       const response = await fetch(`${API_BASE}/v1/ais/ai/recommendations`, {
         method: "POST",
         headers: getAuthHeaders(),
+        signal: requestTimeoutSignal(),
         body: JSON.stringify({
           tripData: {
             activeVesselCount: activeVessels.length,
@@ -327,6 +338,7 @@ export function useAISBackend(
           const response = await fetch(`${API_BASE}/v1/ais/risk/predict-collision`, {
             method: "POST",
             headers: getAuthHeaders(),
+            signal: requestTimeoutSignal(),
             body: JSON.stringify({
               vesselA,
               vesselB,

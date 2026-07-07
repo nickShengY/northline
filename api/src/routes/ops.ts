@@ -8,62 +8,77 @@ import { appendServerEvent } from "../lib/server-events";
 import { requireRole } from "../lib/rbac";
 import { writeAuditLog } from "../lib/audit";
 import { parseBoundedIntegerQueryParam, validateOptionalQueryParam } from "../lib/route-params";
+import { canUseDevelopmentDataFallback, demoDashboard, demoGear, demoHazards, demoTimelineEvents, demoTrips, shouldUseDevelopmentDataFallback } from "../lib/dev-fallback";
 
 export const opsRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();
 
 opsRouter.get("/dashboard", async (c) => {
   const auth = c.get("auth");
-  const [tripSummary, offshoreGearSummary, iceGearSummary, hazardSummary] = await withTenant(c.env, auth.tenantId, async (sql) => {
-    const trips = await sql`
-      select
-        count(*) filter (where status = 'ACTIVE')::int as active_trips,
-        coalesce(sum(compliance_open_issues), 0)::int as compliance_issues_open,
-        count(*) filter (where exists (
-          select 1 from compliance_state
-          where compliance_state.tenant_id = trip_state.tenant_id
-            and compliance_state.trip_id = trip_state.trip_id
-            and compliance_state.status = 'SIGNED'
-            and compliance_state.signed_at is not null
-        ))::int as compliance_signed,
-        count(*) filter (where not exists (
-          select 1 from compliance_state
-          where compliance_state.tenant_id = trip_state.tenant_id
-            and compliance_state.trip_id = trip_state.trip_id
-            and compliance_state.status = 'SIGNED'
-            and compliance_state.signed_at is not null
-        ))::int as compliance_pending,
-        count(*) filter (where latest_risk_tier = 'LOW')::int as low_risk,
-        count(*) filter (where latest_risk_tier = 'MODERATE')::int as moderate_risk,
-        count(*) filter (where latest_risk_tier = 'HIGH')::int as high_risk,
-        count(*) filter (where latest_risk_tier = 'CRITICAL')::int as critical_risk
-      from trip_state
-      where tenant_id = ${auth.tenantId}
-    `;
+  if (canUseDevelopmentDataFallback(c.env)) {
+    return c.json(demoDashboard());
+  }
 
-    const offshoreGear = await sql`
-      select
-        count(*)::int as total_gear,
-        count(*) filter (where status = 'MISSING')::int as missing_gear
-      from gear_state_offshore
-      where tenant_id = ${auth.tenantId}
-    `;
+  let summaries: any[];
+  try {
+    summaries = await withTenant(c.env, auth.tenantId, async (sql) => {
+      const trips = await sql`
+        select
+          count(*) filter (where status = 'ACTIVE')::int as active_trips,
+          coalesce(sum(compliance_open_issues), 0)::int as compliance_issues_open,
+          count(*) filter (where exists (
+            select 1 from compliance_state
+            where compliance_state.tenant_id = trip_state.tenant_id
+              and compliance_state.trip_id = trip_state.trip_id
+              and compliance_state.status = 'SIGNED'
+              and compliance_state.signed_at is not null
+          ))::int as compliance_signed,
+          count(*) filter (where not exists (
+            select 1 from compliance_state
+            where compliance_state.tenant_id = trip_state.tenant_id
+              and compliance_state.trip_id = trip_state.trip_id
+              and compliance_state.status = 'SIGNED'
+              and compliance_state.signed_at is not null
+          ))::int as compliance_pending,
+          count(*) filter (where latest_risk_tier = 'LOW')::int as low_risk,
+          count(*) filter (where latest_risk_tier = 'MODERATE')::int as moderate_risk,
+          count(*) filter (where latest_risk_tier = 'HIGH')::int as high_risk,
+          count(*) filter (where latest_risk_tier = 'CRITICAL')::int as critical_risk
+        from trip_state
+        where tenant_id = ${auth.tenantId}
+      `;
 
-    const iceGear = await sql`
-      select
-        count(*)::int as total_gear,
-        count(*) filter (where status = 'MISSING')::int as missing_gear
-      from gear_state_ice
-      where tenant_id = ${auth.tenantId}
-    `;
+      const offshoreGear = await sql`
+        select
+          count(*)::int as total_gear,
+          count(*) filter (where status = 'MISSING')::int as missing_gear
+        from gear_state_offshore
+        where tenant_id = ${auth.tenantId}
+      `;
 
-    const hazards = await sql`
-      select count(*)::int as hazard_count
-      from hazard_layer_state
-      where tenant_id = ${auth.tenantId}
-    `;
+      const iceGear = await sql`
+        select
+          count(*)::int as total_gear,
+          count(*) filter (where status = 'MISSING')::int as missing_gear
+        from gear_state_ice
+        where tenant_id = ${auth.tenantId}
+      `;
 
-    return [trips[0] ?? {}, offshoreGear[0] ?? {}, iceGear[0] ?? {}, hazards[0] ?? {}];
-  });
+      const hazards = await sql`
+        select count(*)::int as hazard_count
+        from hazard_layer_state
+        where tenant_id = ${auth.tenantId}
+      `;
+
+      return [trips[0] ?? {}, offshoreGear[0] ?? {}, iceGear[0] ?? {}, hazards[0] ?? {}];
+    });
+  } catch (error) {
+    if (shouldUseDevelopmentDataFallback(c.env, error)) {
+      return c.json(demoDashboard());
+    }
+    throw error;
+  }
+
+  const [tripSummary, offshoreGearSummary, iceGearSummary, hazardSummary] = summaries;
 
   const totalGear = Number(offshoreGearSummary.total_gear ?? 0) + Number(iceGearSummary.total_gear ?? 0);
   const missingGear = Number(offshoreGearSummary.missing_gear ?? 0) + Number(iceGearSummary.missing_gear ?? 0);
@@ -92,7 +107,41 @@ opsRouter.get("/dashboard", async (c) => {
 opsRouter.get("/trip/:tripId/state", async (c) => {
   const auth = c.get("auth");
   const tripId = c.req.param("tripId");
-  const tripEvents = await eventsForTrip(c.env, auth.tenantId, tripId, { limit: 5000 });
+  if (canUseDevelopmentDataFallback(c.env)) {
+    const trip = demoTrips.find((item) => item.trip_id === tripId) ?? null;
+    return c.json({
+      trip,
+      gear: demoGear.filter((item) => item.trip_id === tripId),
+      hazards: Object.fromEntries(demoHazards.map((hazard) => [hazard.hazard_id, hazard])),
+      compliance: {
+        completion_meter: trip?.completion_meter ?? 0,
+        errors: trip?.compliance_open_issues ? [{ code: "DEMO_CLOSEOUT_REVIEW", severity: "error", message: "Demo closeout issue requires review." }] : [],
+        warnings: []
+      },
+      source: "development_fallback"
+    });
+  }
+
+  let tripEvents: OpsEvent[];
+  try {
+    tripEvents = await eventsForTrip(c.env, auth.tenantId, tripId, { limit: 5000 });
+  } catch (error) {
+    if (shouldUseDevelopmentDataFallback(c.env, error)) {
+      const trip = demoTrips.find((item) => item.trip_id === tripId) ?? null;
+      return c.json({
+        trip,
+        gear: demoGear.filter((item) => item.trip_id === tripId),
+        hazards: Object.fromEntries(demoHazards.map((hazard) => [hazard.hazard_id, hazard])),
+        compliance: {
+          completion_meter: trip?.completion_meter ?? 0,
+          errors: trip?.compliance_open_issues ? [{ code: "DEMO_CLOSEOUT_REVIEW", severity: "error", message: "Demo closeout issue requires review." }] : [],
+          warnings: []
+        },
+        source: "development_fallback"
+      });
+    }
+    throw error;
+  }
 
   const state = replay(tripEvents);
   const compliance = runComplianceValidation(tripEvents);
@@ -205,11 +254,41 @@ opsRouter.get("/trip/:tripId/timeline", async (c) => {
   });
   if (!limitResult.ok) return c.json(limitResult.error, 400);
   const limit = limitResult.value;
+  if (canUseDevelopmentDataFallback(c.env)) {
+    const events = demoTimelineEvents
+      .filter((event) => event.tenant_id === auth.tenantId && event.subject_id === tripId)
+      .slice(-limit);
+    const timeline = [...events].sort((a, b) => a.ts_device.localeCompare(b.ts_device));
+    return c.json({
+      trip_id: tripId,
+      count: timeline.length,
+      timeline,
+      source: "development_fallback"
+    });
+  }
 
-  const events = await eventsForTrip(c.env, auth.tenantId, tripId, { limit, latest: true });
+  let events: OpsEvent[];
+  let usingDevelopmentFallback = false;
+  try {
+    events = await eventsForTrip(c.env, auth.tenantId, tripId, { limit, latest: true });
+  } catch (error) {
+    if (shouldUseDevelopmentDataFallback(c.env, error)) {
+      usingDevelopmentFallback = true;
+      events = demoTimelineEvents
+        .filter((event) => event.tenant_id === auth.tenantId && event.subject_id === tripId)
+        .slice(-limit);
+    } else {
+      throw error;
+    }
+  }
   const timeline = [...events].sort((a, b) => a.ts_device.localeCompare(b.ts_device));
 
-  return c.json({ trip_id: tripId, count: timeline.length, timeline });
+  return c.json({
+    trip_id: tripId,
+    count: timeline.length,
+    timeline,
+    ...(usingDevelopmentFallback ? { source: "development_fallback" } : {})
+  });
 });
 
 opsRouter.get("/trips", async (c) => {
@@ -220,21 +299,49 @@ opsRouter.get("/trips", async (c) => {
   if (!modeResult.ok) return c.json(modeResult.error, 400);
   const status = statusResult.value;
   const mode = modeResult.value;
+  if (canUseDevelopmentDataFallback(c.env)) {
+    const rows = demoTrips.filter((trip) =>
+      (status === undefined || trip.status === status) &&
+      (mode === undefined || trip.mode === mode)
+    );
 
-  const rows = await withTenant(c.env, auth.tenantId, async (sql) => {
-    return sql`
-      select trip_id, tenant_id, mode, owner_id, status, started_at::text, ended_at::text, location_name,
-             completion_meter, compliance_open_issues, latest_risk_tier, updated_at::text
-      from trip_state
-      where tenant_id = ${auth.tenantId}
-        and (${status ?? null}::text is null or status = ${status ?? null})
-        and (${mode ?? null}::text is null or mode = ${mode ?? null})
-      order by updated_at desc
-      limit 500
-    `;
+    return c.json({
+      trips: rows.map((row) => ({ ...row })),
+      source: "development_fallback"
+    });
+  }
+
+  let rows: any[];
+  let usingDevelopmentFallback = false;
+  try {
+    rows = await withTenant(c.env, auth.tenantId, async (sql) => {
+      return sql`
+        select trip_id, tenant_id, mode, owner_id, status, started_at::text, ended_at::text, location_name,
+               completion_meter, compliance_open_issues, latest_risk_tier, updated_at::text
+        from trip_state
+        where tenant_id = ${auth.tenantId}
+          and (${status ?? null}::text is null or status = ${status ?? null})
+          and (${mode ?? null}::text is null or mode = ${mode ?? null})
+        order by updated_at desc
+        limit 500
+      `;
+    });
+  } catch (error) {
+    if (shouldUseDevelopmentDataFallback(c.env, error)) {
+      usingDevelopmentFallback = true;
+      rows = demoTrips.filter((trip) =>
+        (status === undefined || trip.status === status) &&
+        (mode === undefined || trip.mode === mode)
+      );
+    } else {
+      throw error;
+    }
+  }
+
+  return c.json({
+    trips: rows.map((row) => ({ ...row })),
+    ...(usingDevelopmentFallback ? { source: "development_fallback" } : {})
   });
-
-  return c.json({ trips: rows.map((row) => ({ ...row })) });
 });
 
 opsRouter.post("/trip/:tripId/rebuild", requireRole("ORG_ADMIN", "OWNER", "CAPTAIN"), async (c) => {

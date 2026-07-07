@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
@@ -16,10 +16,13 @@ function manualChunks(id: string) {
   }
 }
 
-export default defineConfig({
-  plugins: [
-    react(),
-    VitePWA({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+
+  return {
+    plugins: [
+      react(),
+      VitePWA({
       registerType: "autoUpdate",
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
@@ -55,19 +58,20 @@ export default defineConfig({
           { name: "Trips", short_name: "Trips", description: "Manage trips", url: "/trips" }
         ]
       }
-    })
-  ],
-  server: {
-    port: 5173,
-    host: "127.0.0.1",
-    strictPort: true
-  },
-  build: {
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        manualChunks
+      })
+    ],
+    server: {
+      port: 5173,
+      host: "127.0.0.1",
+      strictPort: true
+    },
+    build: {
+      sourcemap: env.VITE_ENABLE_SOURCEMAPS === "true",
+      rollupOptions: {
+        output: {
+          manualChunks
+        }
       }
     }
-  }
+  };
 });

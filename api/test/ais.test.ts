@@ -38,6 +38,38 @@ describe("AIS proxy route security", () => {
     });
   });
 
+  it("does not accept websocket auth through query tokens outside development", async () => {
+    const response = await app.request(
+      "/v1/ais/stream?token=demoTenant:portal_admin:ORG_ADMIN",
+      {
+        headers: {
+          Upgrade: "websocket"
+        }
+      },
+      { APP_ENV: "production", R2_BUCKET: bucket }
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("accepts websocket stream auth through the websocket protocol header", async () => {
+    const response = await app.request(
+      "/v1/ais/stream",
+      {
+        headers: {
+          Upgrade: "websocket",
+          "Sec-WebSocket-Protocol": "northline-token.demoTenant:portal_admin:ORG_ADMIN"
+        }
+      },
+      { APP_ENV: "development", R2_BUCKET: bucket }
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "ais_proxy_unavailable"
+    });
+  });
+
   it("keeps AIS HTTP endpoints behind the standard auth middleware", async () => {
     const response = await app.request(
       "/v1/ais/vessels",

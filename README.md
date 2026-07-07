@@ -30,10 +30,9 @@ Offline-first operations platform for:
 ## Quick start
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev
-pnpm typecheck
-pnpm test
+pnpm release:check
 ```
 
 ## API health gates
@@ -55,6 +54,8 @@ pnpm test
 - `R2_BUCKET` (for artifact storage binding)
 
 Production browser builds must use a runtime session/JWT token, not static `VITE_*` bearer tokens. The active frontend clients now start behind a session gate that verifies `/v1/auth/session` before rendering the operations workspace and stores tokens under `northline.apiToken` only after user entry.
+Production frontend artifacts are checked by `pnpm verify:dist` so public builds do not publish source maps, static development tokens, or incomplete PWA install metadata.
+When smoke-testing preview servers, run `pnpm verify:app-identity` before using screenshots or browser state as evidence. It fails if a local port is serving another app.
 
 Security-sensitive operations enforce role checks and are written to `audit_log`; outside development, audit persistence failures fail the operation closed.
 Outside development, sync uploads require trusted device signatures from registered devices; development still accepts `dev:*` signatures for local field-app workflows.

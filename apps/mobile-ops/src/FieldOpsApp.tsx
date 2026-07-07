@@ -1166,8 +1166,12 @@ export function FieldOpsApp() {
           await ackSyncCursor(cursor);
           writeSyncCursor(cursor);
         }
-        setSyncState(drafts.length ? "PENDING" : "SYNCED");
-        setStatusMessage(`Reconciled server event history (${downloaded} events). Retry sync with ${drafts.length} queued drafts.`);
+        // Re-read the queue after the async reconciliation pass so the status
+        // reflects any draft changes made while the repair was running.
+        const currentDrafts = await readDraftEvents();
+        setDrafts(currentDrafts);
+        setSyncState(currentDrafts.length ? "PENDING" : "SYNCED");
+        setStatusMessage(`Reconciled server event history (${downloaded} events). Retry sync with ${currentDrafts.length} queued drafts.`);
         toastSuccess("Sync chain reconciled", `${downloaded} server ${downloaded === 1 ? "event" : "events"} downloaded.`);
         trackActivity(`Reconciled ${downloaded} server events for sync repair.`, "success");
       } catch (error) {

@@ -11,6 +11,8 @@ pnpm install --frozen-lockfile
 pnpm release:check
 ```
 
+`pnpm release:check` runs linting, type checking, unit tests, production builds, distribution artifact checks, dependency audit, and peer dependency checks. The distribution artifact check fails when deployable frontend assets include public source maps, static development tokens, or missing install metadata.
+
 Run the live database integration check when a disposable Postgres-compatible database is available:
 
 ```bash
@@ -19,6 +21,8 @@ pnpm test:db
 ```
 
 The database test creates an isolated schema, applies every migration, verifies row-level security primitives, and drops the schema when complete.
+
+CI runs this database integration check against a disposable Postgres service before staging or production deploy jobs are allowed to start.
 
 ## Required Production Configuration
 
@@ -130,7 +134,8 @@ Attach this evidence to every release:
 
 - Commit SHA and environment name.
 - Output summary from `pnpm release:check`.
-- Output summary from `pnpm test:db`, or a note that no live database URL was available.
+- Output summary from `pnpm verify:app-identity` for preview or deployed frontend URLs used during browser smoke tests.
+- Output summary from `pnpm test:db`.
 - `/ready` JSON response from the target Worker.
 - Identity-provider token smoke result for `/v1/auth/session`.
 - Mobile offline queue smoke result, including durable downloaded-event cache, durable download cursor, and `/v1/sync/ack` confirmation.

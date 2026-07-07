@@ -53,7 +53,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             aria-invalid={error ? true : undefined}
             aria-describedby={describedById}
             className={clsx(
-              'w-full px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)]',
+              'w-full min-h-[48px] px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)]',
               'bg-[var(--bg-secondary)] border border-[var(--border-default)] text-[var(--ink-primary)]',
               'placeholder:text-[var(--ink-muted)]',
               'focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-2 focus:ring-[var(--accent-cyan)]/20',
@@ -203,7 +203,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
           aria-invalid={error ? true : undefined}
           aria-describedby={describedById}
           className={clsx(
-            'w-full px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)] cursor-pointer',
+            'w-full min-h-[48px] px-4 py-3 rounded-[var(--radius-md)] font-[var(--font-body)] transition-all duration-[var(--transition-base)] cursor-pointer',
             'bg-[var(--bg-secondary)] border border-[var(--border-default)] text-[var(--ink-primary)]',
             'focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-2 focus:ring-[var(--accent-cyan)]/20',
             error && 'border-[var(--danger)]',

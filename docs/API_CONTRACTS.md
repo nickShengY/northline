@@ -5,7 +5,7 @@
 - Header: `Authorization: Bearer <tenant_id>:<actor_id>:<role>` (dev mode)
 - All `/v1/*` routes are tenant-scoped.
 - Outside development, bearer tokens must be issuer- and audience-constrained RS256 JWTs with `sub`, `tenant_id`, `role`, and `exp` claims. Missing or invalid tenant, role, or expiration claims are rejected.
-- AIS WebSocket stream upgrades are authenticated as well. Non-browser clients should send the normal `Authorization` header; browser clients may use a short-lived `token` query parameter or `sec-websocket-protocol: northline-token.<token>`. The API strips local auth tokens before connecting to the AIS upstream.
+- AIS WebSocket stream upgrades are authenticated as well. Non-browser clients should send the normal `Authorization` header; browser clients should use `sec-websocket-protocol: northline-token.<token>`. Query-string WebSocket tokens are accepted only in development to avoid leaking production credentials through URLs, browser history, or edge request logs. The API strips local auth tokens before connecting to the AIS upstream.
 - API responses include defensive HTTP headers (`nosniff`, frame denial, restrictive CSP, no-referrer, and production HSTS).
 - Route path segments and identifier query filters are bounded to URL-safe identifier characters and length-limited before database access. Full query strings are capped at 4096 bytes.
 

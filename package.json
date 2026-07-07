@@ -2,18 +2,20 @@
   "name": "northline",
   "private": true,
   "version": "0.1.0",
-  "packageManager": "pnpm@9.15.2",
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
-    "release:check": "pnpm typecheck && pnpm test && pnpm build",
+    "verify:dist": "node scripts/verify-dist.mjs",
+    "verify:app-identity": "node scripts/verify-app-identity.mjs",
+    "release:check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm verify:dist && pnpm audit --audit-level moderate && pnpm peers check",
     "test:db": "pnpm --filter @northline/api test:db"
   },
   "devDependencies": {
-    "turbo": "^2.4.0",
+    "turbo": "^2.10.3",
     "typescript": "^5.7.3"
   }
 }

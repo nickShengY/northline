@@ -3,6 +3,14 @@ import { readRuntimeToken } from "@northline/shared";
 const base = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
 
 export const defaultDevToken = "demoTenant:portal_admin:ORG_ADMIN";
+const REQUEST_TIMEOUT_MS = 15000;
+
+function requestTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  }
+  return undefined;
+}
 
 function pathSegment(value: string) {
   return encodeURIComponent(value);
@@ -40,32 +48,35 @@ const authHeader = {
 
 export async function getSession() {
   const res = await fetch(`${base}/v1/auth/session`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Session unavailable");
   return res.json();
 }
 
 export async function getAuthConfig() {
-  const res = await fetch(`${base}/v1/auth/config`);
+  const res = await fetch(`${base}/v1/auth/config`, {
+    signal: requestTimeoutSignal()
+  });
   if (!res.ok) throw new Error("Auth configuration unavailable");
   return res.json();
 }
 
 export async function getDashboard() {
-  const res = await fetch(`${base}/v1/ops/dashboard`, { headers: authHeader });
+  const res = await fetch(`${base}/v1/ops/dashboard`, { headers: authHeader, signal: requestTimeoutSignal() });
   if (!res.ok) throw new Error("Failed to load dashboard");
   return res.json();
 }
 
 export async function getTripState(tripId: string) {
-  const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/state`, { headers: authHeader });
+  const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/state`, { headers: authHeader, signal: requestTimeoutSignal() });
   if (!res.ok) throw new Error("Failed to load trip state");
   return res.json();
 }
 
 export async function verifyCertificate(certificateId: string) {
-  const res = await fetch(`${base}/v1/trace/certificate/${pathSegment(certificateId)}/verify`, { headers: authHeader });
+  const res = await fetch(`${base}/v1/trace/certificate/${pathSegment(certificateId)}/verify`, { headers: authHeader, signal: requestTimeoutSignal() });
   if (!res.ok) throw new Error("Certificate not found");
   return res.json();
 }
@@ -82,6 +93,7 @@ export async function scoreRisk(input: {
   const res = await fetch(`${base}/v1/safety/risk/score`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   if (!res.ok) throw new Error("Risk score failed");
@@ -90,7 +102,8 @@ export async function scoreRisk(input: {
 
 export async function getOpenIncidents() {
   const res = await fetch(`${base}/v1/safety/incidents/open`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Incident feed unavailable");
   return res.json();
@@ -105,6 +118,7 @@ export async function createLot(input: {
   const res = await fetch(`${base}/v1/trace/lot/create`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   if (!res.ok) throw new Error("Lot creation failed");
@@ -113,7 +127,8 @@ export async function createLot(input: {
 
 export async function listLots() {
   const res = await fetch(`${base}/v1/trace/lots`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Lot listing failed");
   return res.json();
@@ -123,6 +138,7 @@ export async function signCompliance(tripId: string, pkgId: string) {
   const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/compliance/sign`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ pkg_id: pkgId })
   });
   if (!res.ok) throw new Error("Compliance sign-off failed");
@@ -133,6 +149,7 @@ export async function generateComplianceExport(tripId: string) {
   const res = await fetch(`${base}/v1/export/compliance-package`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify({ trip_id: tripId, format: "JSON" })
   });
   if (!res.ok) throw new Error("Compliance export failed");
@@ -141,7 +158,8 @@ export async function generateComplianceExport(tripId: string) {
 
 export async function listTrips() {
   const res = await fetch(`${base}/v1/ops/trips`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Trip listing failed");
   return res.json();
@@ -150,7 +168,8 @@ export async function listTrips() {
 export async function getTripTimeline(tripId: string, limit = 100) {
   const query = queryString({ limit: boundedInteger(limit, 1, 5000) });
   const res = await fetch(`${base}/v1/ops/trip/${pathSegment(tripId)}/timeline${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Trip timeline failed");
   return res.json();
@@ -159,7 +178,8 @@ export async function getTripTimeline(tripId: string, limit = 100) {
 export async function listIntegrations(type?: string) {
   const query = queryString({ type });
   const res = await fetch(`${base}/v1/integrations/status${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Integration listing failed");
   return res.json();
@@ -168,7 +188,8 @@ export async function listIntegrations(type?: string) {
 export async function listRulesets(mode?: string) {
   const query = queryString({ mode });
   const res = await fetch(`${base}/v1/rules/all${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Ruleset listing failed");
   return res.json();
@@ -186,6 +207,7 @@ export async function upsertRuleset(input: {
   const res = await fetch(`${base}/v1/rules/upsert`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   if (!res.ok) throw new Error("Ruleset upsert failed");
@@ -194,7 +216,8 @@ export async function upsertRuleset(input: {
 
 export async function listDevices() {
   const res = await fetch(`${base}/v1/sync/devices`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Device listing failed");
   return res.json();
@@ -210,6 +233,7 @@ export async function registerDevice(input: {
   const res = await fetch(`${base}/v1/sync/device/register`, {
     method: "POST",
     headers: authHeader,
+    signal: requestTimeoutSignal(),
     body: JSON.stringify(input)
   });
   if (!res.ok) throw new Error("Device registration failed");
@@ -219,7 +243,8 @@ export async function registerDevice(input: {
 export async function revokeDevice(deviceId: string) {
   const res = await fetch(`${base}/v1/sync/device/revoke/${pathSegment(deviceId)}`, {
     method: "POST",
-    headers: authHeader
+    headers: authHeader,
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Device revocation failed");
   return res.json();
@@ -228,7 +253,8 @@ export async function revokeDevice(deviceId: string) {
 export async function getSyncMetrics(hours = 24) {
   const query = queryString({ hours: boundedInteger(hours, 1, 168) });
   const res = await fetch(`${base}/v1/sync/metrics/summary${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Sync metrics failed");
   return res.json();
@@ -238,7 +264,8 @@ export async function getSyncMetrics(hours = 24) {
 export async function getGearForTrip(tripId: string, mode?: "OFFSHORE" | "ICE") {
   const query = queryString({ mode });
   const res = await fetch(`${base}/v1/gear/trip/${pathSegment(tripId)}${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Gear data unavailable");
   return res.json();
@@ -248,7 +275,8 @@ export async function getGearForTrip(tripId: string, mode?: "OFFSHORE" | "ICE") 
 export async function getHazards(scope?: string) {
   const query = queryString({ scope });
   const res = await fetch(`${base}/v1/safety/hazards${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Hazards data unavailable");
   return res.json();
@@ -257,7 +285,8 @@ export async function getHazards(scope?: string) {
 export async function listAuditEvents(limit = 25) {
   const query = queryString({ limit: boundedInteger(limit, 1, 500) });
   const res = await fetch(`${base}/v1/audit/events${query}`, {
-    headers: { Authorization: authHeader.Authorization }
+    headers: { Authorization: authHeader.Authorization },
+    signal: requestTimeoutSignal()
   });
   if (!res.ok) throw new Error("Audit event listing failed");
   return res.json();

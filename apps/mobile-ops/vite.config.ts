@@ -78,7 +78,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true
     },
     build: {
-      sourcemap: true,
+      sourcemap: env.VITE_ENABLE_SOURCEMAPS === "true",
       rollupOptions: {
         output: {
           manualChunks

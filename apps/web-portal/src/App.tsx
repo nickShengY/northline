@@ -1370,12 +1370,12 @@ export function App() {
                 <Stack gap="sm" className="mt-4">
                   <p className="text-xs font-semibold text-[var(--ink-secondary)]">Select Trips</p>
                   {tripRows.map((trip) => (
-                    <label key={trip.trip_id} className="flex items-center gap-2 p-2 rounded bg-[var(--bg-secondary)] cursor-pointer">
+                    <label key={trip.trip_id} className="flex items-center gap-3 p-3 rounded bg-[var(--bg-secondary)] cursor-pointer">
                       <input
                         type="checkbox"
                         checked={selectedTripIds.includes(trip.trip_id)}
                         onChange={() => toggleTripSelection(trip.trip_id)}
-                        className="w-4 h-4"
+                        className="w-6 h-6"
                       />
                       <span className="text-sm">
                         <strong>{formatTripLabel(trip.trip_id)}</strong>

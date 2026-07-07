@@ -6,25 +6,28 @@
   "scripts": {
     "dev": "wrangler dev --local --persist-to .wrangler/state",
     "build": "wrangler deploy --dry-run --env=\"\"",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:db": "vitest run test/db-integration.test.ts"
   },
   "dependencies": {
-    "@hono/zod-validator": "^0.4.2",
+    "@hono/zod-validator": "^0.8.0",
     "@neondatabase/serverless": "^0.10.4",
     "@northline/shared": "workspace:*",
-    "hono": "^4.6.18",
+    "hono": "^4.12.27",
     "jose": "^5.9.6",
     "pg": "^8.16.3",
     "ulidx": "^2.4.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260531.1",
+    "@cloudflare/workers-types": "^4.20260701.1",
     "@types/pg": "^8.15.5",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8",
-    "wrangler": "^4.95.0"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.107.0"
   }
 }
