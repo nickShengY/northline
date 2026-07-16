@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
       VitePWA({
       registerType: "autoUpdate",
       workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
+        globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2}"],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/api\.northline\.fishery\/.*/i,
