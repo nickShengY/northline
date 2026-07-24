@@ -44,16 +44,23 @@ pnpm release:check
 
 - `NEON_DATABASE_URL` (valid `postgres://` or `postgresql://` connection URL)
 - `READINESS_CHECK_DATABASE` (`true`/`1` enables a live `select 1` database probe in `/ready`)
-- `JWT_PUBLIC_KEY` (importable RS256 public key for production auth verification)
-- `JWT_ISSUER` (valid HTTPS issuer URL) / `JWT_AUDIENCE` (production token constraints)
-- `AUTH_LOGIN_URL` (optional HTTPS frontend identity-provider handoff) / `AUTH_CLIENT_ID` / `AUTH_SCOPES`
+- `FIREBASE_PROJECT_ID` (required outside development; API verifies only Google Firebase ID tokens for this project)
+- `INITIAL_ORG_ADMIN_UID` / `INITIAL_ORG_ADMIN_TENANT_ID` (one-time bootstrap mapping for the first Google user; remove after inserting durable memberships)
+- `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID` (public Firebase web configuration for each frontend build)
 - `CORS_ORIGIN` (comma-separated production/staging HTTP(S) browser origin allowlist, without paths)
 - `RATE_LIMIT_MAX_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (optional API throttle tuning; production uses `RATE_LIMITER` Durable Object binding)
 - `OBSERVABILITY_WEBHOOK_URL` (valid HTTPS collector URL, required outside development) / `OBSERVABILITY_WEBHOOK_TOKEN` (required outside development) / `OBSERVABILITY_SAMPLE_RATE` (optional structured request/error telemetry tuning)
 - `SIGNING_SECRET` (at least 32 characters outside development; signs server-generated event hashes)
 - `R2_BUCKET` (for artifact storage binding)
+- `STRIPE_SECRET_KEY` (Worker secret; never expose this to a browser)
+- `STRIPE_PRICE_ID` (the server-configured Stripe Price ID; products and amounts are not accepted from clients)
+- `STRIPE_CHECKOUT_MODE` (`subscription` or `payment`; defaults to `subscription`)
+- `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` (HTTPS browser URLs outside development)
+- `STRIPE_WEBHOOK_SECRET` (Worker secret used to verify the raw Stripe webhook payload)
 
-Production browser builds must use a runtime session/JWT token, not static `VITE_*` bearer tokens. The active frontend clients now start behind a session gate that verifies `/v1/auth/session` before rendering the operations workspace and stores tokens under `northline.apiToken` only after user entry.
+Billing endpoints: `POST /v1/billing/checkout` is limited to tenant `OWNER` and `ORG_ADMIN` users and returns a Stripe-hosted Checkout URL. `POST /v1/billing/webhook` is intentionally unauthenticated because Stripe signs it; it accepts only a valid, current `Stripe-Signature` and updates the tenant's entitlement projection idempotently. Apply `db/migrations/0011_stripe_billing.sql` before configuring the webhook. Use Stripe Checkout's webhook endpoint URL, not a browser route.
+
+Production browser builds use Firebase Google sign-in only. The active frontend clients exchange the Firebase ID token with the API at runtime, verify `/v1/auth/session` before rendering the operations workspace, and store the resulting runtime token under `northline.apiToken`; no static bearer token is shipped in `VITE_*` variables.
 Production frontend artifacts are checked by `pnpm verify:dist` so public builds do not publish source maps, static development tokens, or incomplete PWA install metadata.
 When smoke-testing preview servers, run `pnpm verify:app-identity` before using screenshots or browser state as evidence. It fails if a local port is serving another app.
 

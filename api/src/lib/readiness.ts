@@ -1,5 +1,4 @@
 import type { Env } from "../types";
-import { importSPKI } from "jose";
 import { pingDatabase } from "./db";
 
 export interface ReadinessCheck {
@@ -62,41 +61,26 @@ function validSigningSecret(value: string | undefined) {
   return Boolean(value && value.trim().length >= 32);
 }
 
-async function jwtPublicKeyCheck(env: Env, productionLike: boolean): Promise<ReadinessCheck> {
+function firebaseProjectCheck(env: Env, productionLike: boolean): ReadinessCheck {
   if (!productionLike) {
     return {
-      name: "jwt_public_key",
+      name: "firebase_project_id",
       ok: true,
       required: false,
-      message: "JWT verifier configured for this environment"
+      message: "Firebase project configuration optional in development"
     };
   }
 
-  if (!configured(env.JWT_PUBLIC_KEY)) {
+  if (!configured(env.FIREBASE_PROJECT_ID)) {
     return {
-      name: "jwt_public_key",
+      name: "firebase_project_id",
       ok: false,
       required: true,
-      message: "JWT_PUBLIC_KEY is required outside development"
+      message: "FIREBASE_PROJECT_ID is required outside development"
     };
   }
 
-  try {
-    await importSPKI(env.JWT_PUBLIC_KEY as string, "RS256");
-    return {
-      name: "jwt_public_key",
-      ok: true,
-      required: true,
-      message: "JWT public key imports successfully"
-    };
-  } catch {
-    return {
-      name: "jwt_public_key",
-      ok: false,
-      required: true,
-      message: "JWT_PUBLIC_KEY must be a valid RS256 public key"
-    };
-  }
+  return { name: "firebase_project_id", ok: true, required: true, message: "Firebase project configured" };
 }
 
 async function databaseReachabilityCheck(
@@ -163,7 +147,7 @@ export async function buildReadinessReport(env: Env, options: ReadinessOptions =
       required: true,
       message: env.R2_BUCKET ? "artifact bucket binding configured" : "R2_BUCKET binding is missing"
     },
-    await jwtPublicKeyCheck(env, productionLike),
+    firebaseProjectCheck(env, productionLike),
     {
       name: "cors_origin",
       ok: !productionLike || validCorsOrigins(env.CORS_ORIGIN),
@@ -178,30 +162,20 @@ export async function buildReadinessReport(env: Env, options: ReadinessOptions =
               : "CORS_ORIGIN must contain comma-separated HTTP(S) origins without paths"
     },
     {
-      name: "issuer_audience",
-      ok: !productionLike || (validHttpsUrl(env.JWT_ISSUER) && configured(env.JWT_AUDIENCE)),
+      name: "firebase_google_only",
+      ok: !productionLike || configured(env.FIREBASE_PROJECT_ID),
       required: productionLike,
       message:
         !productionLike
-          ? "JWT issuer and audience constraints configured"
-          : !configured(env.JWT_ISSUER) || !configured(env.JWT_AUDIENCE)
-            ? "JWT_ISSUER and JWT_AUDIENCE are required outside development"
-            : validHttpsUrl(env.JWT_ISSUER)
-              ? "JWT issuer and audience constraints configured"
-              : "JWT_ISSUER must be a valid HTTPS URL"
+          ? "Firebase Google-only token verification configured"
+          : "FIREBASE_PROJECT_ID is required for Firebase Google-only token verification"
     },
     {
       name: "auth_login_url",
-      ok: !productionLike || validHttpsUrl(env.AUTH_LOGIN_URL),
-      required: productionLike,
+      ok: true,
+      required: false,
       message:
-        !productionLike
-          ? "identity-provider login handoff not configured"
-          : !configured(env.AUTH_LOGIN_URL)
-            ? "AUTH_LOGIN_URL is required outside development"
-          : validHttpsUrl(env.AUTH_LOGIN_URL)
-            ? "identity-provider login handoff configured"
-            : "AUTH_LOGIN_URL must be a valid HTTPS URL"
+        "Firebase client sign-in does not require a server login handoff"
     },
     {
       name: "durable_rate_limiter",
@@ -214,12 +188,17 @@ export async function buildReadinessReport(env: Env, options: ReadinessOptions =
     },
     {
       name: "observability_webhook",
-      ok: !productionLike || (validHttpsUrl(env.OBSERVABILITY_WEBHOOK_URL) && configured(env.OBSERVABILITY_WEBHOOK_TOKEN)),
+      ok:
+        !productionLike ||
+        enabled(env.OBSERVABILITY_NATIVE) ||
+        (validHttpsUrl(env.OBSERVABILITY_WEBHOOK_URL) && configured(env.OBSERVABILITY_WEBHOOK_TOKEN)),
       required: productionLike,
       message:
         !productionLike
-          ? "observability webhook configured"
-          : !configured(env.OBSERVABILITY_WEBHOOK_URL)
+          ? "observability configured"
+          : enabled(env.OBSERVABILITY_NATIVE)
+            ? "Cloudflare native observability configured"
+            : !configured(env.OBSERVABILITY_WEBHOOK_URL)
             ? "OBSERVABILITY_WEBHOOK_URL is required outside development"
             : validHttpsUrl(env.OBSERVABILITY_WEBHOOK_URL)
               ? configured(env.OBSERVABILITY_WEBHOOK_TOKEN)

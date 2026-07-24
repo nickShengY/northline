@@ -7,6 +7,14 @@ import { LandingExperience } from "./LandingExperience";
 import { defaultDevToken, getAuthConfig, getSession } from "./lib/api";
 import "./styles.css";
 
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+};
+const hasFirebaseConfig = Object.values(firebaseConfig).every((value) => typeof value === "string" && value.length > 0);
+
 // Service worker registration is injected automatically by vite-plugin-pwa
 // (injectRegister defaults to "auto" with registerType: "autoUpdate").
 
@@ -39,6 +47,7 @@ function WebPortalRoot() {
     <SessionGate
       appName="Northline Command Portal"
       defaultDevToken={import.meta.env.DEV ? defaultDevToken : undefined}
+      firebaseConfig={hasFirebaseConfig ? firebaseConfig : undefined}
       getAuthConfig={getAuthConfig}
       getSession={getSession}
     >

@@ -1,0 +1,8 @@
+api
+apps/mobile-ops
+apps/tablet-ops
+legacy-apps
+db
+docs
+scripts
+.claude

@@ -19,6 +19,7 @@ import { iceRouter } from "./routes/ice";
 import { projectionRouter } from "./routes/projection";
 import { authProviderConfig, authRouter } from "./routes/auth";
 import { auditRouter } from "./routes/audit";
+import { billingRouter, handleStripeWebhook } from "./routes/billing";
 import { rateLimitMiddleware } from "./lib/rate-limit";
 export { RateLimiterDurableObject } from "./lib/rate-limit";
 import { buildReadinessReport } from "./lib/readiness";
@@ -191,9 +192,13 @@ app.get("/ready", async (c) => {
 
 app.use("/v1/*", rateLimitMiddleware);
 app.get("/v1/auth/config", (c) => c.json(authProviderConfig(c.env)));
+// Stripe signs the exact raw request body and cannot carry our bearer token.
+// Register this before the shared /v1 auth middleware.
+app.post("/v1/billing/webhook", (c) => handleStripeWebhook(c.req.raw, c.env));
 app.use("/v1/*", authMiddleware);
 app.route("/v1/auth", authRouter);
 app.route("/v1/audit", auditRouter);
+app.route("/v1/billing", billingRouter);
 app.route("/v1/sync", syncRouter);
 app.route("/v1/stl", stlRouter);
 app.route("/v1/ops", opsRouter);

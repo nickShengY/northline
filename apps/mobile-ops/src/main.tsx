@@ -6,6 +6,14 @@ import { FieldOpsApp } from "./FieldOpsApp";
 import { defaultDevToken, getAuthConfig, getSession } from "./lib/api";
 import "./styles.css";
 
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+};
+const hasFirebaseConfig = Object.values(firebaseConfig).every((value) => typeof value === "string" && value.length > 0);
+
 export interface PwaStatusDetail {
   type: "updated" | "offline-ready";
   message: string;
@@ -44,6 +52,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <SessionGate
       appName="Northline Field Ops"
       defaultDevToken={import.meta.env.DEV ? defaultDevToken : undefined}
+      firebaseConfig={hasFirebaseConfig ? firebaseConfig : undefined}
       getAuthConfig={getAuthConfig}
       getSession={getSession}
     >

@@ -20,7 +20,11 @@
 5. `0005_complete_schema.sql`
 6. `0006_stl_packet_queue.sql`
 7. `0007_enterprise_hardening.sql`
-8. `seeds/rulesets.sql`
+8. `0008_sync_cursor_ack.sql`
+9. `0009_tenant_composite_keys.sql`
+10. `0010_tenant_scoped_projection_keys.sql`
+11. `0011_stripe_billing.sql`
+12. `seeds/rulesets.sql`
 
 ## Notes
 

@@ -25,7 +25,9 @@ describe("database migration invariants", () => {
       "0007_enterprise_hardening.sql",
       "0008_sync_cursor_ack.sql",
       "0009_tenant_composite_keys.sql",
-      "0010_tenant_scoped_projection_keys.sql"
+      "0010_tenant_scoped_projection_keys.sql",
+      "0011_stripe_billing.sql",
+      "0012_firebase_identity_membership.sql"
     ]);
   });
 
@@ -71,6 +73,26 @@ describe("database migration invariants", () => {
     expect(sql).toContain("primary key (tenant_id, gear_id)");
     expect(sql).toContain("primary key (tenant_id, device_id)");
     expect(sql).toContain("primary key (tenant_id, checkin_id)");
+  });
+
+  it("persists Stripe webhook receipts and entitlements behind tenant RLS", () => {
+    const sql = migration("0011_stripe_billing.sql");
+
+    expect(sql).toContain("create table if not exists billing_entitlement");
+    expect(sql).toContain("create table if not exists stripe_webhook_event");
+    expect(sql).toContain("primary key (tenant_id, entitlement_key)");
+    expect(sql).toContain("primary key (tenant_id, stripe_event_id)");
+    expect(sql).toContain("call enable_rls_with_policy('billing_entitlement')");
+    expect(sql).toContain("call enable_rls_with_policy('stripe_webhook_event')");
+  });
+
+  it("maps Firebase UIDs to server-owned tenant memberships and roles", () => {
+    const sql = migration("0012_firebase_identity_membership.sql");
+    expect(sql).toContain("create table if not exists firebase_identity_membership");
+    expect(sql).toContain("firebase_uid text primary key");
+    expect(sql).toContain("role text not null check");
+    expect(sql).toContain("status text not null default 'ACTIVE'");
+    expect(sql).toContain("revoke all on firebase_identity_membership from public");
   });
 
   it("keeps the live Postgres integration gate aligned with every migration file", () => {

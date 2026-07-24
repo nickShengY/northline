@@ -30,7 +30,7 @@ export class VesselDataCache extends DurableObject {
     switch (url.pathname) {
       case "/vessels":
         return this.getVessels();
-      case "/vessel/:mmsi":
+      case "/vessel":
         return this.getVessel(url.searchParams.get("mmsi") || "");
       case "/nearby":
         return this.getNearbyVessels(
@@ -583,18 +583,25 @@ export default {
 
 async function handleAPI(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname.replace("/api", "");
+  const durableObjectUrl = new URL(request.url);
+  durableObjectUrl.pathname = path;
+  const durableObjectRequest = new Request(durableObjectUrl.toString(), request);
 
   // Route to appropriate Durable Object
-  if (path.startsWith("/vessels") || path.startsWith("/nearby")) {
+  if (
+    path.startsWith("/vessel") ||
+    path.startsWith("/nearby") ||
+    path.startsWith("/stats")
+  ) {
     const id = env.VESSEL_DATA_CACHE.idFromName("cache");
     const cache = env.VESSEL_DATA_CACHE.get(id);
-    return cache.fetch(request);
+    return cache.fetch(durableObjectRequest);
   }
 
   if (path.startsWith("/risk") || path.startsWith("/ai")) {
     const id = env.AI_RISK_ANALYZER.idFromName("analyzer");
     const analyzer = env.AI_RISK_ANALYZER.get(id);
-    return analyzer.fetch(request);
+    return analyzer.fetch(durableObjectRequest);
   }
 
   return new Response("Unknown API endpoint", { status: 404 });
@@ -614,7 +621,7 @@ async function handleWebSocket(request: Request, env: Env): Promise<Response> {
 
   // Get bounding box from query params or use default (Bering Sea)
   const url = new URL(request.url);
-  const bbox = url.searchParams.get("bbox") || "[[-170,50],[-130,70]]";
+  const bbox = url.searchParams.get("bbox") || "[[[50,-170],[70,-130]]]";
   const boundingBoxes = JSON.parse(bbox);
 
   // Subscribe to AISStream
@@ -630,7 +637,13 @@ async function handleWebSocket(request: Request, env: Env): Promise<Response> {
   // Relay messages from AISStream to client
   aisSocket.addEventListener("message", async (event) => {
     try {
-      const data = JSON.parse(event.data as string);
+      const rawData =
+        typeof event.data === "string"
+          ? event.data
+          : event.data instanceof ArrayBuffer
+            ? new TextDecoder().decode(event.data)
+            : await event.data.text();
+      const data = JSON.parse(rawData);
 
       // Process and enhance the data
       const enhanced = enhanceAISData(data);

@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { getApp, getApps, initializeApp } from "firebase/app";
+import { GoogleAuthProvider, getAuth, signInWithPopup } from "firebase/auth";
 import {
   clearRuntimeToken,
   consumeRuntimeTokenFromUrl,
@@ -20,9 +22,17 @@ export interface NorthlineSession {
 export interface SessionGateProps {
   appName: string;
   defaultDevToken?: string;
+  firebaseConfig?: FirebaseClientConfig;
   getAuthConfig?: () => Promise<AuthProviderConfig>;
   getSession: () => Promise<NorthlineSession>;
   children: React.ReactNode;
+}
+
+export interface FirebaseClientConfig {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  appId: string;
 }
 
 export interface AuthProviderConfig {
@@ -80,12 +90,14 @@ function isNetworkError(error: unknown): boolean {
 function SessionForm({
   appName,
   defaultToken,
+  firebaseConfig,
   authConfig,
   message,
   onSubmit
 }: {
   appName: string;
   defaultToken?: string;
+  firebaseConfig?: FirebaseClientConfig;
   authConfig?: AuthProviderConfig | null;
   message?: string;
   onSubmit: (token: string, persistence: RuntimeTokenPersistence) => void;
@@ -93,6 +105,25 @@ function SessionForm({
   const [token, setToken] = useState(defaultToken ?? "");
   const [remember, setRemember] = useState(false);
   const [showToken, setShowToken] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+
+  const signInWithGoogle = async () => {
+    if (!firebaseConfig) return;
+    setSigningIn(true);
+    setSignInError(null);
+    try {
+      const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      const credential = await signInWithPopup(getAuth(app), provider);
+      onSubmit(await credential.user.getIdToken(), "local");
+    } catch {
+      setSignInError("Google sign-in did not complete. Please try again.");
+    } finally {
+      setSigningIn(false);
+    }
+  };
 
   return (
     <main style={shellStyle}>
@@ -112,7 +143,11 @@ function SessionForm({
           </div>
         </div>
 
-        {authConfig?.enabled && authConfig.login_url ? (
+        {firebaseConfig ? (
+          <Button type="button" fullWidth leftIcon={<Icon name="ShieldCheck" size={16} />} onClick={() => void signInWithGoogle()} disabled={signingIn}>
+            {signingIn ? "Signing in…" : "Continue with Google"}
+          </Button>
+        ) : authConfig?.enabled && authConfig.login_url ? (
           <Button
             type="button"
             fullWidth
@@ -123,7 +158,7 @@ function SessionForm({
           </Button>
         ) : null}
 
-        <label htmlFor="northline-session-token" style={{ display: "block", color: "var(--ink-secondary)", marginTop: 16, marginBottom: 8 }}>
+        {!firebaseConfig ? <><label htmlFor="northline-session-token" style={{ display: "block", color: "var(--ink-secondary)", marginTop: 16, marginBottom: 8 }}>
           Session token
         </label>
         <div style={{ position: "relative" }}>
@@ -168,13 +203,15 @@ function SessionForm({
 
         <Button type="submit" fullWidth style={{ marginTop: 18 }} disabled={!token.trim()}>
           Continue
-        </Button>
+        </Button></> : null}
+
+        {signInError ? <p role="alert" style={{ color: "var(--danger)", margin: "14px 0 0" }}>{signInError}</p> : null}
       </form>
     </main>
   );
 }
 
-export function SessionGate({ appName, defaultDevToken, getAuthConfig, getSession, children }: SessionGateProps) {
+export function SessionGate({ appName, defaultDevToken, firebaseConfig, getAuthConfig, getSession, children }: SessionGateProps) {
   const [state, setState] = useState<SessionState>({ status: "checking" });
   const [authConfig, setAuthConfig] = useState<AuthProviderConfig | null>(null);
 
@@ -279,6 +316,7 @@ export function SessionGate({ appName, defaultDevToken, getAuthConfig, getSessio
       <SessionForm
         appName={appName}
         defaultToken={defaultDevToken}
+        firebaseConfig={firebaseConfig}
         authConfig={authConfig}
         message={state.message}
         onSubmit={(token, persistence) => {

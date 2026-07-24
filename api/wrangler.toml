@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 
+[observability]
+enabled = true
+
 [vars]
 APP_ENV = "development"
 NEON_DATABASE_URL = "postgresql://localhost:5432/northline"
@@ -24,6 +27,12 @@ new_sqlite_classes = ["RateLimiterDurableObject"]
 name = "northline-api-staging"
 [env.staging.vars]
 APP_ENV = "staging"
+CORS_ORIGIN = "https://northline-web-rho.vercel.app"
+OBSERVABILITY_NATIVE = "true"
+AIS_PROXY_URL = "https://northline-ais-proxy-staging.19971117yunshen.workers.dev"
+STRIPE_CHECKOUT_MODE = "subscription"
+STRIPE_SUCCESS_URL = "https://northline-web-rho.vercel.app/?billing=success"
+STRIPE_CANCEL_URL = "https://northline-web-rho.vercel.app/?billing=cancel"
 
 [[env.staging.r2_buckets]]
 binding = "R2_BUCKET"
@@ -37,6 +46,9 @@ class_name = "RateLimiterDurableObject"
 name = "northline-api"
 [env.production.vars]
 APP_ENV = "production"
+CORS_ORIGIN = "https://northline-web-rho.vercel.app"
+OBSERVABILITY_NATIVE = "true"
+AIS_PROXY_URL = "https://northline-ais-proxy.19971117yunshen.workers.dev"
 
 [[env.production.r2_buckets]]
 binding = "R2_BUCKET"

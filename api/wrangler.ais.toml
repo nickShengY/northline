@@ -1,0 +1,30 @@
+name = "northline-ais-proxy"
+main = "src/ais-proxy.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "VESSEL_DATA_CACHE"
+class_name = "VesselDataCache"
+
+[[durable_objects.bindings]]
+name = "AI_RISK_ANALYZER"
+class_name = "AIRiskAnalyzer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VesselDataCache", "AIRiskAnalyzer"]
+
+[env.staging]
+name = "northline-ais-proxy-staging"
+
+[[env.staging.durable_objects.bindings]]
+name = "VESSEL_DATA_CACHE"
+class_name = "VesselDataCache"
+
+[[env.staging.durable_objects.bindings]]
+name = "AI_RISK_ANALYZER"
+class_name = "AIRiskAnalyzer"

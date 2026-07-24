@@ -3,7 +3,7 @@ const APPS = [
     id: "web",
     name: "Web Portal",
     url: "http://127.0.0.1:4173/",
-    title: "Northline Command Portal"
+    title: "Commercial Fishing Operations Platform | Northline"
   },
   {
     id: "mobile",
