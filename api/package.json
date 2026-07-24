@@ -24,10 +24,10 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260701.1",
+    "@cloudflare/workers-types": "^5.20260722.1",
     "@types/pg": "^8.15.5",
     "typescript": "^5.7.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.107.0"
+    "wrangler": "^4.114.0"
   }
 }
