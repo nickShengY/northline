@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import "./landing.css";
+import overview from "./content/overview.html?raw";
 
 export interface LandingExperienceProps {
   onEnterPortal: () => void;
@@ -248,13 +249,14 @@ export function LandingExperience({ onEnterPortal }: LandingExperienceProps) {
   };
 
   return (
+    <>
     <div
       className="nl-world"
       data-active={activeBeat}
       ref={rootRef}
       style={{ "--nl-progress": "0" } as CSSProperties}
     >
-      <a className="nl-world__skip" href="#northline-story">Skip to the story</a>
+      <a className="nl-world__skip" href="#platform">Skip to platform details</a>
 
       <div className="nl-world__stage" aria-live="off">
         <div className="nl-world__scenes" aria-hidden="true">
@@ -283,6 +285,7 @@ export function LandingExperience({ onEnterPortal }: LandingExperienceProps) {
             <span>NORTHLINE</span>
           </button>
           <nav className="nl-world__nav" aria-label="Explore Northline">
+            <a href="#platform" style={{ color: "#84e8ef", fontSize: ".75rem" }}>Platform guides</a>
             {storyBeats.map((beat, index) => (
               <button className={index === activeBeat ? "is-active" : ""} key={beat.id} onClick={() => jumpTo(index)} type="button">{beat.label}</button>
             ))}
@@ -295,7 +298,7 @@ export function LandingExperience({ onEnterPortal }: LandingExperienceProps) {
             <article key={beat.id} ref={(node) => { copyRefs.current[index] = node; }}>
               <p className="nl-world__index">{String(index + 1).padStart(2, "0")} / {String(storyBeats.length).padStart(2, "0")}</p>
               <p className="nl-world__eyebrow">{beat.eyebrow}</p>
-              <h1>{beat.title}</h1>
+              <h2>{beat.title}</h2>
               <p className="nl-world__body">{beat.body}</p>
               <ul>{beat.tags.map((tag) => <li key={tag}>{tag}</li>)}</ul>
               <p className="nl-world__detail"><span />{beat.detail}</p>
@@ -326,5 +329,7 @@ export function LandingExperience({ onEnterPortal }: LandingExperienceProps) {
         {storyBeats.map((beat) => <div key={beat.id} />)}
       </div>
     </div>
+    <div dangerouslySetInnerHTML={{ __html: overview }} />
+    </>
   );
 }

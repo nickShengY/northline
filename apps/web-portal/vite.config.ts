@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from "vite";
+import { readFileSync } from "node:fs";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
@@ -21,10 +22,18 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [
+      {
+        name: "northline-public-overview",
+        transformIndexHtml(html) {
+          return html.replace("<!-- northline-overview -->", readFileSync(new URL("./src/content/overview.html", import.meta.url), "utf8"));
+        }
+      },
       react(),
       VitePWA({
       registerType: "autoUpdate",
       workbox: {
+        // Let static guide documents retain their own content and metadata.
+        navigateFallbackDenylist: [/^\/guides(?:\/|$)/],
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2}"],
         runtimeCaching: [
           {

@@ -17,3 +17,6 @@ coverage
 output
 
 .vercel
+
+# macOS metadata on external working volumes
+._*
