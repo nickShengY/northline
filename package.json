@@ -12,7 +12,8 @@
     "verify:dist": "node scripts/verify-dist.mjs",
     "verify:app-identity": "node scripts/verify-app-identity.mjs",
     "release:check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm verify:dist && pnpm audit --audit-level moderate && pnpm peers check",
-    "test:db": "pnpm --filter @northline/api test:db"
+    "test:db": "pnpm --filter @northline/api test:db",
+    "verify:seo": "node seo/generate.mjs && node seo/verify.mjs"
   },
   "devDependencies": {
     "turbo": "^2.10.3",

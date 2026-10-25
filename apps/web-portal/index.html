@@ -6,13 +6,17 @@
     <meta name="theme-color" content="#38bdf8" />
 
     <meta name="description" content="Run safer commercial fishing operations with offline-ready fleet oversight, compliance workflows, catch traceability, and one connected command portal." />
-    <meta name="robots" content="index, follow" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://northline.robopioneer.ca/" />
+    <link rel="stylesheet" href="/guides.css" />
+    <meta property="og:url" content="https://northline.robopioneer.ca/" />
+    <meta property="og:site_name" content="Northline" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Northline | Commercial Fishing Operations Platform" />
     <meta property="og:description" content="Connect vessel operations, crew safety, compliance, and catch traceability—even when the connection drops." />
-    <meta property="og:image" content="/landing/northline-hero.webp" />
+    <meta property="og:image" content="https://northline.robopioneer.ca/landing/northline-hero.webp" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="/landing/northline-hero.webp" />
+    <meta name="twitter:image" content="https://northline.robopioneer.ca/landing/northline-hero.webp" />
     <meta name="twitter:title" content="Northline | Commercial Fishing Operations Platform" />
     <meta name="twitter:description" content="Offline-ready fleet oversight, safety, compliance, and traceability for commercial fishing operations." />
     <meta name="format-detection" content="telephone=no" />
@@ -32,6 +36,8 @@
       {
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
+        "@id": "https://northline.robopioneer.ca/#software",
+        "url": "https://northline.robopioneer.ca/",
         "name": "Northline",
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "Web",
@@ -39,15 +45,17 @@
       }
     </script>
 
-    <!-- Prevent FOUC -->
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","@id":"https://northline.robopioneer.ca/#website","name":"Northline","url":"https://northline.robopioneer.ca/","inLanguage":"en"}</script>
+
+    <!-- Initial page presentation -->
     <style>
       html { background: #08111f; }
-      body { opacity: 0; animation: fadeIn 0.3s ease forwards; }
+      body { margin: 0; }
       @keyframes fadeIn { to { opacity: 1; } }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><!-- northline-overview --></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
