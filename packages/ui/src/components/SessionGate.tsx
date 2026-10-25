@@ -1,3 +1,4 @@
+import { NorthlineBrand } from "./OperationsShell";
 import React, { useCallback, useEffect, useState } from "react";
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { GoogleAuthProvider, getAuth, signInWithPopup } from "firebase/auth";
@@ -126,15 +127,16 @@ function SessionForm({
   };
 
   return (
-    <main style={shellStyle}>
+    <main style={shellStyle} className="session-surface">
       <form
         style={panelStyle}
-        className="animate-slide-in-up"
+        className="animate-slide-in-up session-panel"
         onSubmit={(event) => {
           event.preventDefault();
           onSubmit(token.trim(), remember ? "local" : "session");
         }}
       >
+        <NorthlineBrand subtitle="Operations workspace" />
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
           <Icon name="ShieldCheck" size={32} color="var(--accent-cyan)" />
           <div>
@@ -267,7 +269,7 @@ export function SessionGate({ appName, defaultDevToken, firebaseConfig, getAuthC
 
   if (state.status === "checking") {
     return (
-      <main style={shellStyle}>
+      <main style={shellStyle} className="session-surface">
         <div role="status" style={{ ...panelStyle, display: "flex", alignItems: "center", gap: 12 }}>
           <Icon name="RefreshCw" size={24} spin />
           <span>Verifying session</span>
@@ -278,7 +280,7 @@ export function SessionGate({ appName, defaultDevToken, firebaseConfig, getAuthC
 
   if (state.status === "offline") {
     return (
-      <main style={shellStyle}>
+      <main style={shellStyle} className="session-surface">
         <div role="alert" style={{ ...panelStyle, display: "grid", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <Icon name="AlertTriangle" size={24} color="var(--warning)" />

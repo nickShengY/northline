@@ -1,3 +1,4 @@
+import { OperationsShell, type WorkspaceDestination } from "@northline/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   appendDraftEvent,
@@ -1672,6 +1673,7 @@ export function FieldOpsApp() {
   };
 
   return (
+    <OperationsShell subtitle="Field operations" compact activeId={activeModule} onNavigate={id => setActiveModule(id as Module)} destinations={modules.map(module => ({ id: module.id, label: module.label, icon: moduleMeta[module.id].icon })) as WorkspaceDestination[]}>
     <AppShell maxWidth="xl" className="field-shell">
       {toast.container}
       <section className="mission-hero">
@@ -1721,6 +1723,48 @@ export function FieldOpsApp() {
           />
         </Card>
       </section>
+
+      <Section className="module-picker">
+        <div className="module-grid">
+          {modules.map((module) => {
+            const meta = moduleMeta[module.id];
+            return (
+              <button
+                key={module.id}
+                type="button"
+                className={`module-switch ${activeModule === module.id ? "active" : ""}`}
+                aria-pressed={activeModule === module.id}
+                onClick={() => setActiveModule(module.id)}
+              >
+                <Icon name={meta.icon} size={24} />
+                <span>
+                  <strong>{meta.label}</strong>
+                  <small>{meta.description}</small>
+                </span>
+                {pinnedModules.includes(module.id) && <Badge variant="teal" size="sm">Pinned</Badge>}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Card variant="outline" padding="sm" className="status-callout" role="status" aria-live="polite">
+        <Icon name="Info" size={20} />
+        <p>{statusMessage}</p>
+      </Card>
+
+      <Section
+        title={activeMeta.label}
+        description={activeMeta.description}
+        className="active-module"
+      >
+        <Stack gap="lg">
+          {activeModule === "safety" && renderSafetyModule()}
+          {activeModule === "operations" && renderOperationsModule()}
+          {activeModule === "hazards" && renderHazardsModule()}
+          {activeModule === "learning" && renderLearningModule()}
+        </Stack>
+      </Section>
 
       <Section className="command-section">
         <Grid cols={3} gap="md">
@@ -1845,48 +1889,6 @@ export function FieldOpsApp() {
         </Grid>
       </Section>
 
-      <Section className="module-picker">
-        <div className="module-grid">
-          {modules.map((module) => {
-            const meta = moduleMeta[module.id];
-            return (
-              <button
-                key={module.id}
-                type="button"
-                className={`module-switch ${activeModule === module.id ? "active" : ""}`}
-                aria-pressed={activeModule === module.id}
-                onClick={() => setActiveModule(module.id)}
-              >
-                <Icon name={meta.icon} size={24} />
-                <span>
-                  <strong>{meta.label}</strong>
-                  <small>{meta.description}</small>
-                </span>
-                {pinnedModules.includes(module.id) && <Badge variant="teal" size="sm">Pinned</Badge>}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-
-      <Card variant="outline" padding="sm" className="status-callout" role="status" aria-live="polite">
-        <Icon name="Info" size={20} />
-        <p>{statusMessage}</p>
-      </Card>
-
-      <Section
-        title={activeMeta.label}
-        description={activeMeta.description}
-        className="active-module"
-      >
-        <Stack gap="lg">
-          {activeModule === "safety" && renderSafetyModule()}
-          {activeModule === "operations" && renderOperationsModule()}
-          {activeModule === "hazards" && renderHazardsModule()}
-          {activeModule === "learning" && renderLearningModule()}
-        </Stack>
-      </Section>
-
       <Section title="Recent Activity" className="activity-section">
         <Grid cols={2} gap="lg">
           <Card variant="glass">
@@ -1939,5 +1941,6 @@ export function FieldOpsApp() {
         loading={confirmBusy}
       />
     </AppShell>
+    </OperationsShell>
   );
 }

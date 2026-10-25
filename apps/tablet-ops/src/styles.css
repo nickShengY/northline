@@ -57,3 +57,12 @@ button, input, select, textarea {
     grid-column: span 2 / span 2;
   }
 }
+
+body { background: #031827; }
+.bridge-shell > header { padding: 22px; border: 1px solid #1a465f; border-radius: 8px; background: linear-gradient(115deg, #0b3248, #062135); }
+.bridge-shell > section { border-bottom: 1px solid #123a50; padding-bottom: 18px; }
+.bridge-shell .touch-action-btn { min-height: 50px; padding: 12px 18px; border-radius: 6px; }
+.bridge-shell .workspace-view .nl-card { background: linear-gradient(120deg, #0a293e, #072033); }
+.bridge-shell .workspace-view > section > div:first-child > h2 { font-size: 24px; }
+.bridge-shell .trip-select { max-width: 480px; }
+@media (max-width: 760px) { .bridge-shell > header { padding: 16px; } .bridge-shell > header > div { gap: 16px; flex-wrap: wrap; } .bridge-shell .touch-action-btn { flex: 1 1 42%; } }

@@ -1,3 +1,4 @@
+import { OperationsShell } from "@northline/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
@@ -182,6 +183,7 @@ function formatTripLabel(id?: string) {
 }
 
 export function VesselOpsApp() {
+  const [bridgeView, setBridgeView] = useState("bridge");
   const toast = useToast();
   const [vesselStatus, setVesselStatus] = useState<VesselStatus>("DOCKED");
   const [syncState, setSyncState] = useState<SyncState>("SYNCING");
@@ -538,7 +540,13 @@ export function VesselOpsApp() {
   ];
 
   return (
-    <AppShell maxWidth="full">
+    <OperationsShell subtitle="Vessel operations" activeId={bridgeView} onNavigate={setBridgeView} destinations={[
+      { id: 'bridge', label: 'Bridge overview', icon: 'Ship' },
+      { id: 'deck', label: 'Deck & safety', icon: 'Anchor' },
+      { id: 'records', label: 'Devices & bridge log', icon: 'ClipboardList' },
+      { id: 'activity', label: 'Activity records', icon: 'Archive' },
+    ]}>
+    <AppShell maxWidth="full" className="bridge-shell">
       {toast.container}
 
       {mobAlertActive && (
@@ -669,7 +677,8 @@ export function VesselOpsApp() {
         </div>
       </Section>
 
-      <Section title="Bridge Decision Support">
+      <div className="workspace-view" hidden={bridgeView !== "bridge"}>
+      <Section title="Bridge overview">
         <Grid cols={2} gap="md">
           <Card variant="glass">
             <CardHeader>
@@ -740,6 +749,8 @@ export function VesselOpsApp() {
         </Grid>
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={bridgeView !== "deck"}>
       <Section>
         <Grid cols={3} gap="md">
           <Card variant="glass" className="md-col-span-2">
@@ -885,6 +896,8 @@ export function VesselOpsApp() {
         </Grid>
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={bridgeView !== "records"}>
       <Section>
         <Grid cols={2} gap="md">
           <Card variant="glass">
@@ -960,6 +973,8 @@ export function VesselOpsApp() {
         </Grid>
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={bridgeView !== "activity"}>
       <Section title="Activity Log">
         <ActivityList
           items={activityLog.slice(0, 15).map((item) => ({
@@ -992,6 +1007,7 @@ export function VesselOpsApp() {
         </div>
       </div>
 
+      </div>
       <ConfirmModal
         open={clearEmergencyOpen}
         onClose={() => setClearEmergencyOpen(false)}
@@ -1012,5 +1028,6 @@ export function VesselOpsApp() {
         confirmText="Log Check"
       />
     </AppShell>
+    </OperationsShell>
   );
 }
