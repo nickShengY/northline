@@ -74,6 +74,7 @@ export function useFleetData(tripId?: string, refreshInterval = 30000): UseFleet
               if (!hasPosition) syntheticPositionUsed = true;
               const projected = hasPosition ? projectToMap(lat, lon) : { x: 20 + idx * 15, y: 20 + idx * 10 };
               return {
+                kind: "gear" as const,
                 id: gear.gear_id,
                 name: gear.gear_id,
                 x: projected.x,
@@ -95,13 +96,15 @@ export function useFleetData(tripId?: string, refreshInterval = 30000): UseFleet
       // positions come from a synthetic fallback grid.
       if (tripRows.length > 0) syntheticPositionUsed = true;
       const vesselData: VesselPosition[] = tripRows.map((trip, idx) => ({
+        kind: "trip" as const,
         id: trip.trip_id,
-        name: `Vessel ${trip.trip_id.slice(-4)}`,
+        name: `Trip ${String(idx + 1).padStart(2, "0")}`,
         x: 10 + (idx % 5) * 18,
         y: 15 + Math.floor(idx / 5) * 20,
         status: mapTripStatusToVesselStatus(trip.status),
-        heading: trip.status === "ACTIVE" ? 45 + idx * 30 : 0,
-        speed: trip.status === "ACTIVE" ? 2.5 : 0,
+        // Trip records do not include live course or speed.
+        heading: undefined,
+        speed: undefined,
         tripPhase: trip.status,
         lastCheckin: trip.updated_at
           ? new Date(trip.updated_at).toLocaleTimeString()
@@ -485,7 +488,7 @@ export function useComplianceData(tripId?: string) {
 // Helper functions
 function mapTripStatusToVesselStatus(status: string): VesselPosition["status"] {
   switch (status) {
-    case "ACTIVE": return "FISHING";
+    case "ACTIVE": return "ACTIVE";
     case "PLANNED": return "TRANSIT";
     case "COMPLETED": return "DOCKED";
     case "CANCELLED": return "DOCKED";

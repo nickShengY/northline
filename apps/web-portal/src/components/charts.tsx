@@ -20,6 +20,7 @@ export interface ChartData {
 }
 
 export interface VesselPosition {
+  kind?: "trip" | "gear";
   id: string;
   name: string;
   x: number; // 0-100 percentage

@@ -484,7 +484,6 @@ select {
   }
 
   .bottom-navigation {
-    position: static !important;
     box-shadow: var(--shadow-md);
   }
 
@@ -588,3 +587,50 @@ select {
     flex-direction: column;
   }
 }
+
+/* Compact field workspace: actions and trip context precede the active module. */
+body { background: #031827; }
+.mission-hero { grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 16px; margin-bottom: 20px; }
+.hero-copy { min-height: 0; padding: 23px; gap: 13px; justify-content: center; background: linear-gradient(120deg, #0b3248, #062135); border: 1px solid #1a465f; border-radius: 8px; }
+.hero-copy h1 { font-size: clamp(27px, 3vw, 38px); line-height: 1.2; max-width: none; letter-spacing: -.03em; }
+.hero-copy p { font-size: 13px; line-height: 1.6; margin: 0; }
+.hero-panel { padding: 20px; }
+.hero-panel-top { margin-bottom: 14px; }
+.command-section .grid { gap: 14px; }
+.command-card, .queue-card, .notes-card { box-shadow: none; }
+.module-grid { gap: 10px; }
+.module-switch { border-radius: 7px; min-height: 78px; background: #08263a; box-shadow: none; }
+.module-switch.active { background: #0b3c56; border-color: #2aabd8; box-shadow: inset 3px 0 #40c8f4; }
+.module-switch strong { font-size: 14px; }
+.module-switch small { font-size: 11px; }
+.status-callout { background: #062c40; color: #c3ddeb; font-size: 13px; border-color: #1d4c64; }
+.active-module > div > h2 { font-size: 24px; }
+.field-shell .bottom-navigation { position: fixed; bottom: 12px; left: calc(232px + (100% - 232px)/2); transform: translateX(-50%); width: min(540px, calc(100% - 270px)); border: 1px solid #285d77; background: #062033f5; box-shadow: 0 10px 35px #0008; backdrop-filter: blur(18px); z-index: 40; }
+.bottom-navigation button[aria-current] { background: #103d55; color: #6cddff; }
+@media (max-width: 1150px) { .field-shell .bottom-navigation { left: calc(200px + (100% - 200px)/2); width: min(540px, calc(100% - 230px)); } }
+@media (max-width: 950px) { .mission-hero { grid-template-columns: 1fr; } .hero-panel { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 12px; } .hero-panel-top { grid-column: 1/-1; margin: 0; } .hero-copy { padding: 20px; } }
+@media (max-width: 760px) {
+  .field-shell .bottom-navigation { left: 12px; right: 12px; bottom: max(10px, env(safe-area-inset-bottom)); width: auto; transform: none; }
+  .mission-hero { gap: 12px; }
+  .hero-copy h1 { font-size: 28px; }
+  .hero-copy { padding: 18px; }
+  .hero-copy p { font-size: 12px; }
+  .hero-panel { grid-template-columns: 1fr; }
+  .module-switch { min-height: 70px; padding: 12px; }
+  .module-switch small { display: none; }
+  .command-section .grid { grid-template-columns: 1fr; }
+  .field-shell .bottom-navigation button { min-width: 60px; min-height: 50px; }
+}
+@media (max-width: 760px) {
+  .hero-copy { min-height: 0; gap: 10px; }
+  .hero-actions { flex-wrap: nowrap; }
+  .hero-actions > * { flex: 1 1 0; padding: 9px 6px; font-size: 12px; min-height: 42px; }
+  .hero-panel-top { display: flex; align-items: center; justify-content: space-between; }
+  .hero-panel { gap: 10px; padding: 14px; }
+  .module-picker { display: none; }
+  .mission-hero { margin-bottom: 12px; }
+  .field-shell .status-callout { font-size: 12px; padding: 10px; }
+  .field-shell .active-module { margin-top: 16px; }
+}
+
+@media (min-width: 761px) { .field-shell .bottom-navigation { display: none; } }

@@ -1105,3 +1105,94 @@ input::placeholder {
     font-size: 2rem;
   }
 }
+
+/* Fleet workspace composition */
+body { background: #031827; }
+.overview-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 22px; }
+.overview-heading h1 { margin: 0 0 4px; }
+.overview-heading p { color: #acc5da; margin: 0; font-size: 15px; }
+.workspace-context { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; border: 1px solid #2799c7; border-radius: 24px; padding: 7px 12px; color: #cceeff; font-size: 11px; }
+.vessel-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.vessel-card { text-align: left; color: #edf6ff; background: linear-gradient(120deg, #0b2c43, #072033); border: 1px solid #1a4760; border-radius: 8px; overflow: hidden; padding: 0; cursor: pointer; min-width: 0; }
+.vessel-card:hover { border-color: #32bcf5; background: #0d3047; }
+.vessel-card-top { display: flex; align-items: center; gap: 15px; min-height: 96px; }
+.vessel-card-top > svg { margin-left: auto; margin-right: 13px; flex-shrink: 0; }
+.vessel-card-top h2 { font-size: 18px; margin: 0 0 8px; overflow-wrap: anywhere; }
+.vessel-photo { width: 32%; align-self: stretch; background-image: linear-gradient(0deg, #082c4430, #082c4410), url('/landing/northline-fleet.webp'); background-size: cover; background-position: 50% 50%; flex-shrink: 0; }
+.vessel-photo--1 { background-position: 20% 55%; }
+.vessel-photo--2 { background-position: 80% 60%; }
+.vessel-status { display: inline-flex; align-items: center; gap: 8px; color: #72d4ff; font-size: 12px; }
+.vessel-status i { width: 8px; height: 8px; background: currentColor; border-radius: 50%; }
+.vessel-status--active, .vessel-status--fishing { color: #2ee2ae; }
+.vessel-status--maintenance { color: #ffce58; }
+.vessel-card-meta { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #173d52; }
+.vessel-card-meta > div { display: flex; align-items: center; gap: 10px; padding: 12px; color: #b5d8ed; min-width: 0; }
+.vessel-card-meta > div + div { border-left: 1px solid #173d52; }
+.vessel-card-meta span { color: #9cbad0; font-size: 10px; }
+.vessel-card-meta strong { display: block; font-size: 11px; color: #d9edfa; font-weight: 500; margin-top: 3px; }
+.fleet-overview-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; }
+.fleet-main-column, .fleet-side-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.fleet-panel { border: 1px solid #18445c; border-radius: 8px; background: linear-gradient(120deg, #092639, #061f30); overflow: hidden; }
+.fleet-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 16px; border-bottom: 1px solid #15384c; min-height: 48px; }
+.fleet-panel-heading h2 { display: flex; align-items: center; gap: 11px; font-size: 15px; margin: 0; letter-spacing: 0; font-weight: 600; }
+.quiet-action { display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: transparent; border: none; padding: 6px 3px; color: #64d6ff; cursor: pointer; font-size: 11px; }
+.quiet-action:hover { color: white; text-decoration: underline; }
+.fleet-chart { position: relative; background: radial-gradient(ellipse at 60% 70%, #0e4760 0, #062a41 40%, #032035 80%); }
+.fleet-chart .fleet-map { width: 100%; display: block; min-height: 250px; max-height: 380px; }
+.fleet-map-label { position: absolute; bottom: 12px; left: 16px; border: 1px solid #20516b; border-radius: 4px; padding: 6px 9px; background: #041b2de0; color: #b5cfdf; font-size: 10px; }
+.fleet-map-caption { padding: 10px 16px; display: flex; gap: 14px; justify-content: space-between; color: #94b2c8; font-size: 10px; border-top: 1px solid #15384c; }
+.fleet-map-caption span:first-child { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.fleet-map-caption i { height: 7px; width: 7px; border-radius: 50%; background: #2ee2ae; }
+.fleet-filter { display: flex; align-items: center; gap: 7px; color: #bad5e6; }
+.fleet-filter select { background: #051f31; border: 1px solid #24516a; padding: 6px 8px; color: #d9edf9; font-size: 11px; }
+.fleet-table-scroll { overflow-x: auto; }
+.fleet-trip-table { width: 100%; border-collapse: collapse; white-space: nowrap; text-align: left; }
+.fleet-trip-table th { color: #b5ccdf; font-size: 11px; padding: 11px 13px; font-weight: 500; background: #0a2a3f; }
+.fleet-trip-table td { border-top: 1px solid #16394d; padding: 10px 13px; color: #bbd0e1; font-size: 11px; }
+.fleet-trip-table tr:hover td { background: #0c3044; }
+.trip-vessel { display: flex; gap: 10px; align-items: center; color: #ecf5fc; }
+.vessel-thumb { height: 40px; width: 40px; border-radius: 4px; background-image: url('/landing/northline-fleet.webp'); background-size: cover; }
+.fleet-empty { padding: 24px; background: #08273a; border: 1px solid #19485e; border-radius: 8px; margin-bottom: 18px; display: grid; justify-items: center; gap: 10px; color: #b8d0e3; text-align: center; }
+.fleet-table-empty { padding: 22px; color: #94b2c8; font-size: 13px; }
+.attention-row { display: flex; gap: 12px; align-items: center; width: 100%; padding: 16px; text-align: left; background: transparent; color: #c7deee; border: 0; border-bottom: 1px solid #15384c; cursor: pointer; }
+.attention-row span { flex: 1; }
+.attention-row strong { font-size: 12px; display: block; }
+.attention-row small { font-size: 10px; display: block; margin-top: 7px; color: #99b5c9; }
+.attention-empty { padding: 22px 20px; display: grid; justify-items: start; gap: 10px; color: #98b7cc; font-size: 12px; line-height: 1.6; }
+.attention-empty > svg { color: #2ee2ae; }
+.attention-empty strong { color: #d4e7f6; font-size: 14px; }
+.assistant-copy { padding: 17px 16px; font-size: 13px; }
+.assistant-copy p { font-weight: 600; margin: 0 0 6px; }
+.assistant-copy span { font-size: 12px; line-height: 1.7; color: #99b7ce; }
+.desk-action { display: flex; align-items: center; gap: 12px; width: calc(100% - 24px); margin: 0 12px 10px; border: 1px solid #21526b; border-radius: 6px; background: #08283b; color: #c9e8f8; padding: 12px; text-align: left; cursor: pointer; }
+.desk-action:hover { background: #10405a; border-color: #2caada; }
+.desk-action span { flex: 1; font-size: 12px; }
+.desk-action small { display: block; font-size: 10px; color: #98b7cc; margin-top: 5px; }
+.fleet-note { display: flex; align-items: start; gap: 10px; color: #85a6bd; font-size: 10px; line-height: 1.6; padding: 0 8px; }
+.fleet-note svg { flex: none; }
+.workspace-view .grid:has(> .nl-card[hidden]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.workspace-view .nl-card[hidden] { display: none; }
+@media (max-width: 1200px) { .vessel-card-top { gap: 9px; } .vessel-card-top h2 { font-size: 15px; } .vessel-card-meta > div { padding: 9px; gap: 6px; } .vessel-card-meta svg { display: none; } }
+@media (max-width: 1000px) { .fleet-overview-grid { grid-template-columns: 1fr; } .fleet-side-column { display: grid; grid-template-columns: 1fr 1fr; } .vessel-cards { gap: 10px; } .vessel-photo { display: none; } .vessel-card-top { padding-left: 15px; min-height: 80px; } .fleet-note { grid-column: 1/-1; } }
+@media (max-width: 600px) { .overview-heading { align-items: start; flex-direction: column; gap: 12px; } .vessel-cards { grid-template-columns: 1fr; } .vessel-photo { display: block; width: 90px; } .vessel-card-top { padding: 0; } .vessel-card-meta svg { display: block; } .fleet-side-column { display: flex; } .workspace-view .grid:has(> .nl-card[hidden]) { grid-template-columns: 1fr; } .fleet-map-caption { flex-wrap: wrap; } .fleet-panel-heading { padding: 12px; } }
+.vessel-card { display: block; font-weight: 400; box-shadow: none; }
+.vessel-card:hover { transform: none; }
+.vessel-card-top { width: 100%; }
+.vessel-card-top > div:nth-child(2) { min-width: 0; }
+.vessel-cards:has(> :nth-child(2):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fleet-panel button { font-weight: 400; box-shadow: none; }
+.fleet-panel button:hover { transform: none; }
+.fleet-trip-table td { font-size: 12px; }
+.fleet-trip-table th { font-size: 12px; }
+.workspace-view .grid:has(> .nl-card[hidden]):has(> .nl-card:not([hidden]):only-of-type) { grid-template-columns: 1fr; }
+@media (max-width: 600px) { .vessel-cards:has(> :nth-child(2):last-child) { grid-template-columns: 1fr; } }
+.fleet-chart { background: #042237 url('/northline-ui/bering-sea.svg') center / 100% 100% no-repeat; }
+.workspace-trip-context { display: flex; align-items: end; gap: 20px; padding: 16px; margin-bottom: 22px; border: 1px solid #194157; border-radius: 7px; background: #082337; }
+.workspace-trip-context > div { min-width: 220px; }
+.workspace-trip-context > span { color: #94b3c9; font-size: 12px; padding-bottom: 12px; }
+@media (max-width: 600px) { .workspace-trip-context { flex-wrap: wrap; gap: 8px; } .workspace-trip-context > div { width: 100%; min-width: 0; } }
+/* Contain visually hidden table labels within the horizontally scrolling region. */
+.fleet-table-scroll { position: relative; }
+.workspace-view .workspace-tools:has(> .nl-card[hidden]) { grid-template-columns: minmax(0, 1fr); max-width: 880px; }
+.workspace-view .workspace-tools--certificates:has(> .nl-card[hidden]) { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: none; }
+@media (max-width: 760px) { .workspace-view .workspace-tools--certificates:has(> .nl-card[hidden]) { grid-template-columns: minmax(0, 1fr); } }

@@ -1,3 +1,5 @@
+import { FleetOverview } from "./components/FleetOverview";
+import { OperationsShell, type WorkspaceDestination } from "@northline/ui";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   createLot,
@@ -252,6 +254,7 @@ function writeJsonStorage(key: string, value: unknown) {
 }
 
 export function App() {
+  const [workspaceView, setWorkspaceView] = useState("overview");
   const [roleView, setRoleView] = useState<RoleView>("OWNER");
   const [tripId, setTripId] = useState("");
   const [certificateId, setCertificateId] = useState("");
@@ -1173,8 +1176,19 @@ export function App() {
     danger: "Action needed"
   };
 
+  const destinations: WorkspaceDestination[] = [
+    { id: "overview", label: "Fleet overview", icon: "Home" },
+    { id: "trips", label: "Trips", icon: "Route" },
+    { id: "safety", label: "Safety", icon: "Shield" },
+    { id: "certificates", label: "Certificates", icon: "ShieldCheck" },
+    { id: "records", label: "Records", icon: "Archive" },
+    { id: "analytics", label: "Fleet intelligence", icon: "Radar" },
+    { id: "workspace", label: "Crew workspace", icon: "Users" },
+    { id: "settings", label: "Settings & devices", icon: "Settings" },
+  ];
   return (
-    <AppShell maxWidth="xl">
+    <OperationsShell subtitle="Fleet operations" destinations={destinations} activeId={workspaceView} onNavigate={setWorkspaceView}>
+    <AppShell maxWidth="full">
       {/* Toast stack (rendered once near the root) */}
       {toastContainer}
 
@@ -1193,13 +1207,17 @@ export function App() {
         variant={confirmDialog?.variant ?? "default"}
       />
 
+      {workspaceView === "overview" && <FleetOverview vessels={vessels.filter(vessel => vessel.kind === "trip")} loading={vesselsLoading} error={vesselsError} approximate={vesselsApproximate} incidents={openIncidents} onNavigate={setWorkspaceView} onRefresh={refetchVessels} onOpenTrip={id => { setTripId(id); setTripState(null); setTripError(null); setWorkspaceView("trips"); }} />}
+      <div hidden={workspaceView === "overview"} className="workspace-view">
       {/* Header */}
       <PageHeader
-        title="Fleet Operations Portal"
-        subtitle="Fleet, safety, and traceability in one operational timeline"
-        eyebrow="Northline Command Surface"
+        title={destinations.find(item => item.id === workspaceView)?.label ?? "Fleet operations"}
+        subtitle="Your fleet, people, and records — connected."
+        eyebrow="Northline / Fleet operations"
       />
 
+      {["safety", "certificates", "analytics"].includes(workspaceView) && <div className="workspace-trip-context"><Select label="Active trip context" value={tripId} onChange={event => { setTripId(event.target.value); setTripState(null); setTripError(null); setRiskResult(null); setOpenIncidents([]); setRiskError(null); }} options={tripRows.map(trip => ({ value: trip.trip_id, label: formatTripLabel(trip.trip_id) }))} /><span>Actions on this screen use the selected trip.</span></div>}
+      <div className="workspace-view" hidden={workspaceView !== "workspace"}>
       {/* KPI Cards */}
       <Section>
         <Grid cols={4} gap="md">
@@ -1394,11 +1412,13 @@ export function App() {
         </Grid>
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={! ["trips", "safety", "certificates"].includes(workspaceView)}>
       {/* Trip State & Certificate & Risk */}
       <Section>
-        <Grid cols={4} gap="md">
+        <Grid cols={4} gap="md" className={`workspace-tools workspace-tools--${workspaceView}`}>
           {/* Trip State Lookup */}
-          <Card variant="glass">
+          <Card hidden={workspaceView !== "trips"} variant="glass">
             <CardHeader>
               <CardTitle>Trip State Lookup</CardTitle>
             </CardHeader>
@@ -1482,7 +1502,7 @@ export function App() {
           </Card>
 
           {/* Certificate Verification */}
-          <Card variant="glass">
+          <Card hidden={workspaceView !== "certificates"} variant="glass">
             <CardHeader>
               <CardTitle>Certificate Verification</CardTitle>
             </CardHeader>
@@ -1522,7 +1542,7 @@ export function App() {
           </Card>
 
           {/* Risk Monitor */}
-          <Card variant="glass">
+          <Card hidden={workspaceView !== "safety"} variant="glass">
             <CardHeader>
               <CardTitle>Risk Monitor</CardTitle>
             </CardHeader>
@@ -1564,7 +1584,7 @@ export function App() {
           </Card>
 
           {/* Trace & Compliance */}
-          <Card variant="glass">
+          <Card hidden={workspaceView !== "certificates"} variant="glass">
             <CardHeader>
               <CardTitle>Guided Closeout</CardTitle>
               <CardDescription>Trace lot, sign, and export in one controlled workflow</CardDescription>
@@ -1605,6 +1625,8 @@ export function App() {
         </Grid>
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={workspaceView !== "settings"}>
       {/* Data Connections & Devices */}
       <Section>
         <Grid cols={3} gap="md">
@@ -1817,6 +1839,8 @@ export function App() {
         </Grid>
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={workspaceView !== "records"}>
       {/* Activity Feed */}
       <Section title="Operations Activity Feed">
         <ActivityList
@@ -1829,6 +1853,8 @@ export function App() {
         />
       </Section>
 
+      </div>
+      <div className="workspace-view" hidden={workspaceView !== "analytics"}>
       {/* VISUALIZATION DASHBOARD */}
       <Section title="Operations Visualizations" description="Live charts built from trips, gear, hazards, and sync telemetry.">
         <Stack gap="md">
@@ -2095,6 +2121,9 @@ export function App() {
           </Grid>
         </Stack>
       </Section>
+      </div>
+      </div>
     </AppShell>
+    </OperationsShell>
   );
 }
