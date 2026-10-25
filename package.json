@@ -9,7 +9,7 @@
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
-    "verify:dist": "node scripts/verify-dist.mjs",
+    "verify:dist": "node scripts/verify-dist.mjs && node seo/verify.mjs --dist",
     "verify:app-identity": "node scripts/verify-app-identity.mjs",
     "release:check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm verify:dist && pnpm audit --audit-level moderate && pnpm peers check",
     "test:db": "pnpm --filter @northline/api test:db",
