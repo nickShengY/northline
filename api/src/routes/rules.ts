@@ -18,7 +18,7 @@ const rulesetUpsertSchema = z.object({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   effective_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   priority: z.number().int().min(1).default(100),
-  rules_json: z.record(z.unknown()).refine(
+  rules_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(64 * 1024),
     "rules_json must be 65536 bytes or less"
   )
@@ -27,7 +27,7 @@ const rulesetUpsertSchema = z.object({
 const riskPolicyUpsertSchema = z.object({
   policy_id: z.string().min(3),
   mode: modeSchema.optional(),
-  policy_json: z.record(z.unknown()).refine(
+  policy_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(32 * 1024),
     "policy_json must be 32768 bytes or less"
   )

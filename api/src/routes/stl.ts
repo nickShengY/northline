@@ -32,7 +32,7 @@ const packetCreateSchema = z.object({
   packet_id: z.string().min(3),
   trip_id: z.string().optional(),
   event_type: z.string().min(1),
-  payload_json: z.record(z.unknown()).refine(
+  payload_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(maxPacketPayloadBytes),
     `payload_json must be ${maxPacketPayloadBytes} bytes or less`
   ),

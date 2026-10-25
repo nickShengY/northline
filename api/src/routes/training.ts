@@ -38,12 +38,12 @@ const moduleUpsertSchema = z.object({
   mode: z.enum(["OFFSHORE", "ICE", "BOTH"]),
   title: z.string().min(3),
   duration_sec: z.number().int().min(30),
-  quiz_json: z.record(z.unknown()).refine(
+  quiz_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(32 * 1024),
     "quiz_json must be 32768 bytes or less"
   ).optional(),
   prerequisites: z.array(z.string()).max(20).default([]),
-  metadata_json: z.record(z.unknown()).default({}).refine(
+  metadata_json: z.record(z.string(), z.unknown()).default({}).refine(
     fitsJsonByteLimit(16 * 1024),
     "metadata_json must be 16384 bytes or less"
   ),

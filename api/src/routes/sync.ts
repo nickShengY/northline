@@ -58,7 +58,7 @@ const metricSchema = z.object({
   ]),
   metric_value: z.number().finite().nonnegative(),
   device_id: syncIdentifierSchema.optional(),
-  dimension_json: z.record(z.unknown()).default({})
+  dimension_json: z.record(z.string(), z.unknown()).default({})
 }).refine((value) => jsonByteLength(value.dimension_json) <= maxSyncMetricDimensionBytes, {
   path: ["dimension_json"],
   message: `dimension_json must be ${maxSyncMetricDimensionBytes} bytes or less`

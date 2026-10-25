@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { validatePayload } from "../src";
+import { gearRegisteredSchema, lotCreatedSchema, tripPlannedSchema } from "../src/events/schemas";
 
 describe("event payload schemas", () => {
+  it("preserves open record keys and defaults after the Zod 4 migration", () => {
+    const lot = { lot_id: "lot_1", trip_id: "trip_1", mode: "OFFSHORE" as const };
+    expect(lotCreatedSchema.parse(lot).species_totals).toEqual({});
+    expect(lotCreatedSchema.parse({ ...lot, species_totals: { cod: 12.5, haddock: 0 }, quality_json: { receiving: { temperature: 2 }, accepted: true } })).toMatchObject({ species_totals: { cod: 12.5, haddock: 0 }, quality_json: { receiving: { temperature: 2 }, accepted: true } });
+    expect(lotCreatedSchema.safeParse({ ...lot, species_totals: { cod: "12.5" } }).success).toBe(false);
+    expect(gearRegisteredSchema.parse({ trip_id: "trip_1", gear_id: "gear_1", mode: "OFFSHORE", label: "Net" }).metadata).toEqual({});
+    expect(tripPlannedSchema.parse({ trip_id: "trip_1", mode: "OFFSHORE", owner_id: "owner_1" }).crew_ids).toEqual([]);
+  });
+
+  it("rejects oversized collections without visiting every invalid item", () => {
+    let visited = 0;
+    const crew = new Proxy(Array(10000).fill(123), {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) visited++;
+        return Reflect.get(target, key, receiver);
+      }
+    });
+    const result = tripPlannedSchema.safeParse({ trip_id: "trip_1", mode: "OFFSHORE", owner_id: "owner_1", crew_ids: crew });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues.some(issue => issue.code === "too_big")).toBe(true);
+    expect(visited).toBe(0);
+  });
+
   it("validates checkin escalation payload", () => {
     const result = validatePayload("CHECKIN_ESCALATED", {
       trip_id: "trip_ice_1",

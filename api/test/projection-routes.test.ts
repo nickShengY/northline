@@ -68,6 +68,6 @@ describe("projection admin routes", () => {
 
     expect(response.status).toBe(400);
     const body = await response.json() as { details?: { fieldErrors?: Record<string, string[]> } };
-    expect(body.details?.fieldErrors?.trip_ids?.[0]).toContain("at most 50");
+    expect(body.details?.fieldErrors?.trip_ids?.[0]).toContain("<=50 items");
   });
 });

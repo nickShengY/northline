@@ -30,7 +30,7 @@ export const gearRegisteredSchema = z.object({
   gear_id: z.string(),
   mode: z.enum(["OFFSHORE", "ICE"]),
   label: z.string(),
-  metadata: z.record(z.any()).default({}).refine(
+  metadata: z.record(z.string(), z.any()).default({}).refine(
     fitsJsonByteLimit(16 * 1024),
     "metadata must be 16384 bytes or less"
   )
@@ -90,8 +90,8 @@ export const lotCreatedSchema = z.object({
   lot_id: z.string(),
   trip_id: z.string(),
   mode: z.enum(["OFFSHORE", "ICE"]),
-  species_totals: z.record(z.number()).default({}),
-  quality_json: z.record(z.unknown()).refine(
+  species_totals: z.record(z.string(), z.number()).default({}),
+  quality_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(16 * 1024),
     "quality_json must be 16384 bytes or less"
   ).optional()
@@ -102,7 +102,7 @@ export const lotScanAttachedSchema = z.object({
   trip_id: z.string(),
   batch_id: z.string(),
   source: z.enum(["API", "CSV", "JSON", "MANUAL"]),
-  species_totals: z.record(z.number()).default({})
+  species_totals: z.record(z.string(), z.number()).default({})
 });
 
 export const lotScanMismatchSchema = z.object({
@@ -185,7 +185,7 @@ export function validatePayload(eventType: string, payload: unknown) {
   if (!schema && !knownEventTypes.has(eventType)) {
     return { ok: false as const, error: { formErrors: [`Unknown event type: ${eventType}`], fieldErrors: {} } };
   }
-  const parsed = (schema ?? z.record(z.unknown())).safeParse(payload);
+  const parsed = (schema ?? z.record(z.string(), z.unknown())).safeParse(payload);
   if (!parsed.success) {
     return { ok: false as const, error: parsed.error.flatten() };
   }

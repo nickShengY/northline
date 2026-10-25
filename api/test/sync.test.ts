@@ -71,7 +71,7 @@ describe("sync protocol routes", () => {
 
     expect(response.status).toBe(400);
     const body = await response.json() as { details?: { fieldErrors?: Record<string, string[]> } };
-    expect(body.details?.fieldErrors?.events?.[0]).toContain("at most 250");
+    expect(body.details?.fieldErrors?.events?.[0]).toContain("<=250 items");
   });
 
   it("rejects malformed sync identifiers and cursors before persistence work", async () => {

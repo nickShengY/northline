@@ -32,9 +32,9 @@ export default defineConfig(({ mode }) => {
       VitePWA({
       registerType: "autoUpdate",
       workbox: {
-        // Let static guide documents retain their own content and metadata.
-        navigateFallbackDenylist: [/^\/guides(?:\/|$)/],
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2}"],
+        // Keep guides and downloadable worksheets outside the app-shell fallback.
+        navigateFallbackDenylist: [/^\/(?:guides|resources)(?:\/|$)/],
+        globPatterns: ["**/*.{js,css,html,csv,ico,png,svg,webp,woff,woff2}"],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/api\.northline\.fishery\/.*/i,
