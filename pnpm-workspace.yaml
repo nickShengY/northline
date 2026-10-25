@@ -13,3 +13,9 @@ minimumReleaseAgeExclude:
   - fast-uri@3.1.4
   - sharp@0.35.0
   - postcss@8.5.18
+# Upstream exact pins still resolve vulnerable versions; remove once the parents advance.
+# https://github.com/advisories/GHSA-m9gg-hp2v-232j
+# https://github.com/advisories/GHSA-xjj6-f33q-929c
+overrides:
+  '@firebase/firestore>@grpc/grpc-js': 1.13.6
+  'miniflare>undici': 7.30.1

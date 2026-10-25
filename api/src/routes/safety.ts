@@ -459,11 +459,11 @@ const mobStartSchema = z.object({
 
 const mobUpdateSchema = z.object({
   workflow_id: z.string().min(3),
-  checklist_json: z.record(z.unknown()).refine(
+  checklist_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(32 * 1024),
     "checklist_json must be 32768 bytes or less"
   ).optional(),
-  roles_assigned: z.record(z.string()).refine(
+  roles_assigned: z.record(z.string(), z.string()).refine(
     fitsJsonByteLimit(8 * 1024),
     "roles_assigned must be 8192 bytes or less"
   ).optional(),
@@ -816,7 +816,7 @@ const briefingSchema = z.object({
   trip_id: z.string().min(3),
   mode: z.enum(["OFFSHORE", "ICE"]),
   briefing_type: z.enum(["PRE_TRIP", "TOOLBOX_TALK", "STORM_PREP", "HAZARD_ALERT"]),
-  checklist_json: z.record(z.unknown()).refine(
+  checklist_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(32 * 1024),
     "checklist_json must be 32768 bytes or less"
   )
@@ -1019,7 +1019,7 @@ safetyRouter.post("/playbook/trigger", async (c) => {
     playbook_id: z.string().min(2),
     trip_id: z.string().min(3),
     trigger_reason: z.string().min(3),
-    context_json: z.record(z.unknown()).refine(
+    context_json: z.record(z.string(), z.unknown()).refine(
       fitsJsonByteLimit(16 * 1024),
       "context_json must be 16384 bytes or less"
     ).optional()

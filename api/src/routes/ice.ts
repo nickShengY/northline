@@ -36,7 +36,7 @@ const returnPlanSchema = z.object({
   trip_id: z.string().min(3),
   return_by: z.string().datetime(),
   access_point: z.string().optional(),
-  route_summary: z.record(z.unknown()).refine(
+  route_summary: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(8 * 1024),
     "route_summary must be 8192 bytes or less"
   ).optional(),

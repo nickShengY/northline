@@ -27,7 +27,7 @@ const lotCreateSchema = z.object({
   trip_id: z.string().min(3),
   mode: z.enum(["OFFSHORE", "ICE"]),
   species_totals: speciesTotalsSchema.default({}),
-  quality_json: z.record(z.unknown()).default({}).refine(
+  quality_json: z.record(z.string(), z.unknown()).default({}).refine(
     fitsJsonByteLimit(16 * 1024),
     "quality_json must be 16384 bytes or less"
   )
@@ -46,7 +46,7 @@ const certificateRequestSchema = z.object({
   trip_id: z.string(),
   vessel_or_group: z.string(),
   event_ids: z.array(z.string()).min(1).max(500),
-  stats: z.record(z.any()).default({}).refine(fitsJsonByteLimit(16 * 1024), "stats must be 16384 bytes or less")
+  stats: z.record(z.string(), z.any()).default({}).refine(fitsJsonByteLimit(16 * 1024), "stats must be 16384 bytes or less")
 });
 
 export const traceRouter = new Hono<{ Bindings: Env; Variables: { auth: AuthContext } }>();

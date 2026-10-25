@@ -8,7 +8,8 @@ const pub = resolve(root, built ? 'dist' : 'public');
 const base = 'https://northline.robopioneer.ca';
 const sitemap = readFileSync(resolve(pub, 'sitemap.xml'),'utf8');
 const urls = [...sitemap.matchAll(/<loc>(.*?)<\/loc>/g)].map(m=>m[1]);
-assert.equal(urls.length,4);
+assert.equal(urls.length,5);
+assert(readFileSync(resolve(pub, "resources/trip-closeout-checklist.csv"), "utf8").startsWith("Owner,Check,Evidence,Status,Reviewer,Follow-up\n"));
 for (const url of urls) {
  const path = new URL(url).pathname;
  const html = path === '/' && !built
@@ -27,3 +28,10 @@ for (const url of urls) {
 }
 assert(readFileSync(resolve(pub,'robots.txt'),'utf8').includes(`Sitemap: ${base}/sitemap.xml`));
 console.log(`Verified ${built?'built':'source'} public pages, canonicals, headings, structured data, internal links, and sitemap.`);
+
+const vite = readFileSync(resolve(root, 'vite.config.ts'), 'utf8');
+assert(vite.includes('(?:guides|resources)'), 'guides and downloads bypass app-shell navigation');
+if (built) {
+ const worker = readFileSync(resolve(pub, 'sw.js'), 'utf8');
+ assert(worker.includes('resources/trip-closeout-checklist.csv'), 'worksheet is precached for offline handoffs');
+}

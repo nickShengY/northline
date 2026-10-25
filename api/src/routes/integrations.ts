@@ -13,7 +13,7 @@ const integrationUpsertSchema = z.object({
   integration_type: z.string().min(2),
   provider: z.string().min(2),
   enabled: z.boolean().default(true),
-  config_json: z.record(z.unknown()).refine(
+  config_json: z.record(z.string(), z.unknown()).refine(
     fitsJsonByteLimit(32 * 1024),
     "config_json must be 32768 bytes or less"
   )

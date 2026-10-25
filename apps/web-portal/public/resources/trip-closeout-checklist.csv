@@ -1,0 +1,6 @@
+Owner,Check,Evidence,Status,Reviewer,Follow-up
+Field operator,Synchronize every trip device,Device ID and last sync and pending or rejected uploads,,,
+Fleet coordinator,Reconcile accepted trip events,Trip ID and event IDs,,,
+Fleet coordinator,Review closeout gaps,Required fields and signatures and warnings,,,
+Processor,Reconcile lot with receiving,Lot ID and trip ID and species discrepancies,,,
+Authorized issuer,Issue and verify certificate,Certificate ID and issue time and verification result,,,
