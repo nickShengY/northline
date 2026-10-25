@@ -163,7 +163,7 @@ describe("sync protocol routes", () => {
 
     expect(response.status).toBe(400);
     const body = await response.json() as { details?: { fieldErrors?: Record<string, string[]> } };
-    expect(body.details?.fieldErrors?.metric_value?.[0]).toContain("greater than or equal to 0");
+    expect(body.details?.fieldErrors?.metric_value?.[0]).toContain(">=0");
   });
 
   it("caps sync metric dimensions before database writes", async () => {
